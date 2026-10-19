@@ -239,6 +239,14 @@
           else if (m.outOfQuota) label += '（额度尽 x' + m.rate + '）'
           else label += '（x' + m.rate + '）'
           line.appendChild(document.createTextNode(label))
+          // 思考强度：同倍率下它决定实际输出 token 量，直接显示出来
+          if (m.effortLabel) {
+            var eff = el('span', null, ' · ' + m.effortLabel)
+            eff.style.opacity = '.7'
+            eff.style.fontSize = '10px'
+            eff.style.marginLeft = '4px'
+            line.appendChild(eff)
+          }
           rl.appendChild(line)
         }
       }
