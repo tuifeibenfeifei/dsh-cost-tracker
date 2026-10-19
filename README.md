@@ -8,20 +8,24 @@ DeepSeek Harness（DSH）多平台费用追踪插件：**按模型自动切换�
 
 三个平台花的**不是同一种钱**：
 
-| 优先级 | 平台 | 花的是什么钱 | 说明 |
+| 优先级 | 平台 | 花的是什么钱 | 适用场景 |
 |---|---|---|---|
-| 第 1 优先 | WorkBuddy 免费模型 | **不花钱** | `hy3`、`step-5-preview`，免费期随时可能变 |
-| 第 2 优先 | WorkBuddy `deepseek-v4.1-flash` | **免费积分** | 倍率 x0.11（全场最低之一），积分每日可领约 3K |
-| 第 3 优先 | 阿里云百炼 | **虚拟钱** | 抵用券有限，留给 WorkBuddy 上没有的模型（GLM / Kimi / MiniMax） |
-| 第 4 优先 | DeepSeek 官方 | **真钱** | 余额约 45 元，花一分少一分 |
+| 第 1 优先 | WorkBuddy 免费模型 | **不花钱** | `hy3`、`step-5-preview`，**长短任务都用它** |
+| 第 2 优先 | 阿里云百炼 | **虚拟钱** | **长任务 / 大上下文优先**，抵用券 217.96 元，100 万上下文 |
+| 第 3 优先 | WorkBuddy `deepseek-v4.1-flash` | **免费积分** | **仅短对话**，倍率 x0.11，长任务烧积分太快 |
+| 第 4 优先 | 其他 WorkBuddy 模型 | **免费积分** | 按倍率与常用度 |
+| 第 5 优先 | DeepSeek 官方 | **真钱** | 余额 45.11 元，花一分少一分 |
 
-**所以优先级不是按单价便宜排序，而是按「花不花真钱 / 可再生不可再生」排序。**
+**所以优先级不是按单价便宜排序，而是按「花不花真钱 / 资源可不可再生」排序。**
 
-积分是**每日免费补充的可再生资源**，抵用券是**用完就没的有限资源**，真钱是**花一分少一分的资源**。
-因此免费模型到期后，先用 WorkBuddy 的付费模型（花积分），再用阿里云（花抵用券），最后才动官方。
+积分每日免费补充、可再生；抵用券用完就没；真钱花一分少一分。
 
-用户的目标是：**先把阿里云抵用券花在 WorkBuddy 覆盖不到的模型上，保留 DeepSeek 官方余额**（因为那是真钱）。
-因此面板突出显示官方余额与抵用券余额，而不是累计花费。
+**但有个实测修正**：WorkBuddy 长任务 token 消耗极大（实测单轮 311 万 / 607 万 token），
+付费模型倍率一乘，积分掉得极快。因此：
+
+- **长任务 / 大上下文 → 阿里云**（抵用券够用，且端点是为长任务调优的）
+- **短对话 → WorkBuddy 付费模型**（花积分，不心疼）
+- 免费模型不受此限，长短任务都能用
 
 ### 纯看单价，官方在任何时段都更便宜
 
@@ -117,14 +121,17 @@ DSH 模型选择器**先按 provider 分组，组内保留第三方 catalog 顺�
 
 #### 用户实际使用顺序（约定）
 
-1. WorkBuddy 免费模型（`hy3`、`step-5-preview`）
-2. WorkBuddy 的 `deepseek-v4.1-flash`（花免费积分，倍率 x0.11）
-3. 阿里云百炼（花抵用券，留给 WorkBuddy 没有的模型）
+1. WorkBuddy 免费模型（`hy3`、`step-5-preview`）—— 长短任务都用
+2. 阿里云百炼（花抵用券）—— **长任务 / 大上下文优先**
+3. WorkBuddy 的 `deepseek-v4.1-flash`（花免费积分，倍率 x0.11）—— **仅短对话**
 4. 其他 WorkBuddy 模型
 5. DeepSeek 官方账号（花真钱）
 
 > 积分每日免费补充、可再生；抵用券用完就没；真钱花一分少一分。
-> 所以免费模型到期后先用 WorkBuddy 付费模型，再用阿里云，最后才动官方。
+>
+> **实测修正**：WorkBuddy 长任务 token 消耗极大（实测单轮 311 万 / 607 万 token），
+> 付费模型乘以倍率后积分掉得极快。所以长任务走阿里云（抵用券够用），
+> 短对话才用 WorkBuddy 付费模型。
 
 #### WorkBuddy 组内四档排序
 
@@ -192,22 +199,6 @@ curl -X POST http://127.0.0.1:<port>/cost-tracker/aliyun/calibrate \
 
 返回 `spentSincePreviousCalibration` 字段，即两次校准之间的真实消耗——可用来核对账目。
 
-## HTTP 路由
-
-| 路由 | 方法 | 用途 |
-|---|---|---|
-| `/cost-tracker/summary` | GET | 汇总视图（各平台花费、三个余额、健康状态、最近 20 轮） |
-| `/cost-tracker/turn` | GET | 最近一轮 |
-| `/cost-tracker/health` | GET | WorkBuddy 账号健康（顺带采样） |
-| `/cost-tracker/aliyun` | GET | 阿里云抵用券余额视图 |
-| `/cost-tracker/aliyun/calibrate` | POST | 用官方 CSV 校准抵用券余额 |
-| `/cost-tracker/deepseek-balance` | GET | DeepSeek 官方余额（真钱）；加 `?force=1` 跳过 60 秒缓存 |
-| `/cost-tracker/models` | GET | WorkBuddy 模型排序 + 徽章表 |
-| `/cost-tracker/reset` | GET | 清空统计（保留阿里云校准基准） |
-
-> 端口不固定（每次启动可能变）。用 `ctx.webServer.getOrigin()` 在宿主侧取，
-> 或从 DSH 的 Web GUI 地址栏读取。
-
 `/cost-tracker/summary` 返回示例：
 
 ```json
@@ -261,12 +252,16 @@ curl -X POST http://127.0.0.1:<port>/cost-tracker/aliyun/calibrate \
 |---|---|---|
 | `/cost-tracker/summary` | GET | 汇总视图（各平台花费、三个余额、健康状态、最近 20 轮） |
 | `/cost-tracker/turn` | GET | 最近一轮 |
+| `/cost-tracker/turns` | GET | 每轮消耗明细（`?limit=50&platform=workbuddy`），排查「钱掉得快」用 |
 | `/cost-tracker/health` | GET | WorkBuddy 账号健康（顺带采样） |
 | `/cost-tracker/aliyun` | GET | 阿里云抵用券余额视图 |
 | `/cost-tracker/aliyun/calibrate` | POST | 用官方 CSV 校准抵用券余额 |
 | `/cost-tracker/deepseek-balance` | GET | DeepSeek 官方余额（真钱）；加 `?force=1` 跳过 60 秒缓存 |
 | `/cost-tracker/models` | GET | WorkBuddy 模型排序 + 徽章表 |
 | `/cost-tracker/reset` | GET | 清空统计（保留阿里云校准基准） |
+
+> 端口不固定（每次启动可能变）。用 `ctx.webServer.getOrigin()` 在宿主侧取，
+> 或从 DSH 的 Web GUI 地址栏读取。
 
 ## 安装
 
