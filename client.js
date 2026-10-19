@@ -75,8 +75,42 @@ window.__ModuleLoader__.load({
     let badgeInFlight = null
     const REFRESH_MS = 30000
 
+    /** 限流/限额状态缓存：modelId -> { rateLimited, rateLimitedUntil, contextOverflowAt } */
+    let limitCache = null
+    let limitFetchedAt = 0
+    let limitInFlight = null
+
     function fetchJson(path) {
       return fetch(path, { headers: { accept: 'application/json' } }).then(r => (r.ok ? r.json() : null))
+    }
+
+    /**
+     * 拉取限流/限额状态。
+     * 悬停说明要用它显示「什么时候能再用」。
+     * 失败时保留上一次的缓存，不阻断其他功能。
+     */
+    function refreshLimits() {
+      if (limitInFlight) return limitInFlight
+      if (limitCache !== null && Date.now() - limitFetchedAt < REFRESH_MS) return Promise.resolve(limitCache)
+      limitInFlight = fetchJson('/cost-tracker/model-limits')
+        .then(json => {
+          const models = json && Array.isArray(json.models) ? json.models : []
+          const map = {}
+          for (const m of models) {
+            if (!m || !m.id) continue
+            map[m.id] = {
+              rateLimited: m.rateLimited === true,
+              rateLimitedUntil: typeof m.rateLimitedUntil === 'number' ? m.rateLimitedUntil : null,
+              contextOverflowAt: typeof m.contextOverflowAt === 'number' ? m.contextOverflowAt : null,
+            }
+          }
+          limitCache = map
+          limitFetchedAt = Date.now()
+          return map
+        })
+        .catch(() => limitCache)
+        .finally(() => { limitInFlight = null })
+      return limitInFlight
     }
 
     function refreshBadges() {
@@ -470,7 +504,24 @@ window.__ModuleLoader__.load({
 
     const inject = ['slots', 'locale']
 
+    /**
+     * 插件入口。
+     *
+     * ⚠️ 整个函数包在 try/catch 里：**前端插件抛异常会让 DSH 判定启动失败**，
+     * 弹出「禁用第三方插件」恢复界面，把用户所有插件都清掉。
+     * 代价是调试信息会丢，所以出错时打 console.error 而不静默。
+     * 任何新代码都必须先跑一遍运行时验证（apply + 组件渲染），
+     * 不能只靠 node --check —— 它查不出未定义标识符。
+     */
     function apply(ctx) {
+      try {
+        applyInner(ctx)
+      } catch (e) {
+        try { console.error('[dsh-cost-tracker] apply failed:', e) } catch { /* 忽略 */ }
+      }
+    }
+
+    function applyInner(ctx) {
       const namespace = 'cost-tracker'
 
       ctx.effect(
