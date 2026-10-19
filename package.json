@@ -1,0 +1,37 @@
+{
+  "name": "dsh-cost-tracker",
+  "version": "0.2.1",
+  "displayName": "DSH Cost Tracker",
+  "description": "DSH 多平台费用追踪：按模型自动切换计费口径，每轮对话结束结算花费，阿里云抵用券余额校准，WorkBuddy 账号健康监控与模型优先级排序数据。",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "icon.svg",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "cost",
+    "billing",
+    "workbuddy",
+    "aliyun"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

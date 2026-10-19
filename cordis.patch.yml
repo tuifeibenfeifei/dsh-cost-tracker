@@ -1,0 +1,8 @@
+# 挂载 dsh-cost-tracker 宿主侧插件。
+# 本插件只做「读取与统计」：注册自己的 HTTP 路由 + 监听会话事件，
+# 不修改任何已有 provider 配置，也不接管 shell。
+# 一行 insert 即挂载 Host 半身；浏览器半身由 package.json 的 dsh.client 声明，
+# 并绑定在 name 为裸包名的这一行上（子路径行不会携带半身）。
+- insert:
+    - id: cost-tracker
+      name: dsh-cost-tracker
