@@ -487,19 +487,43 @@ window.__ModuleLoader__.load({
 
       const lines = buildHoverLines(modelId, meta)
 
+      // 限流标记：不经悬停也能一眼看到「这个模型现在不能用」
+      const limNow = (limitCache && limitCache[modelId]) || {}
+      const limitedNow = !!(limNow.rateLimited && limNow.rateLimitedUntil
+        && limNow.rateLimitedUntil > Date.now())
+
+      const nodes = [h('span', { key: 'n' }, name || rawName), ...tagNodes]
+
+      if (limitedNow) {
+        nodes.push(h('span', {
+          key: 'locked',
+          style: {
+            padding: '0 6px',
+            borderRadius: '4px',
+            background: '#b91c1c',
+            color: '#fff',
+            fontSize: '10px',
+            lineHeight: '17px',
+            fontWeight: 700,
+            letterSpacing: '0.12em',
+            whiteSpace: 'nowrap',
+            userSelect: 'none',
+            pointerEvents: 'none',
+          },
+        }, '限 流'))
+      }
+
+      if (hover && lines.length) {
+        nodes.push(h(HoverTip, { key: 'tip', anchorEl: wrapRef.current, lines }))
+      }
+
       return h('span', {
         key: 'wrap',
         ref: wrapRef,
         style: { display: 'inline-flex', alignItems: 'center', gap: '5px', whiteSpace: 'nowrap', maxWidth: '100%' },
         onMouseEnter: onEnter,
         onMouseLeave: onLeave,
-      }, [
-        h('span', { key: 'n' }, name || rawName),
-        ...tagNodes,
-        hover && lines.length
-          ? h(HoverTip, { key: 'tip', anchorEl: wrapRef.current, lines })
-          : null,
-      ])
+      }, nodes)
     }
 
     const inject = ['slots', 'locale']

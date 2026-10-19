@@ -41,6 +41,8 @@
       '.dshcw-reco{font-size:11px;line-height:16px;color:#d1d5db}',
       '.dshcw-reco b{color:#fff}',
       '.dshcw-tip{margin-top:2px;padding:5px 7px;border-radius:6px;background:rgba(252,165,165,.14);border:1px solid rgba(252,165,165,.32);color:#fecaca;font-size:11px;line-height:15px}',
+      '.dshcw-suggest{margin-top:2px;padding:5px 7px;border-radius:6px;background:rgba(251,191,36,.14);border:1px solid rgba(251,191,36,.34);color:#fde68a;font-size:11px;line-height:15px}',
+      '.dshcw-ok{margin-top:2px;padding:5px 7px;border-radius:6px;background:rgba(74,222,128,.12);border:1px solid rgba(74,222,128,.28);color:#bbf7d0;font-size:11px;line-height:15px}',
       '.dshcw-empty{padding:8px 10px;font-size:11px;color:#9ca3af}',
       '.dshcw-hidden .dshcw-body{display:none}',
       '.dshcw-hidden .dshcw-head{border-bottom:none}',
@@ -186,7 +188,7 @@
     return r
   }
 
-  function render(summary, reco) {
+  function render(summary, reco, sess) {
     var body = root.querySelector('.dshcw-body')
     if (!body) return
     body.textContent = ''
@@ -217,6 +219,26 @@
       if (Number(t.workbuddyCredits) > 0) today.push(t.workbuddyCredits + ' 分')
     }
     body.appendChild(row('累计', today.length ? today.join(' / ') : '0', null, today.length ? 'warn' : 'free'))
+
+    // 本次会话花费
+    if (sess && sess.ok && sess.turns) {
+      var mine = []
+      if (Number(sess.costTokenBased) > 0) mine.push('¥' + fmtNum(sess.costTokenBased))
+      if (Number(sess.workbuddyCredits) > 0) mine.push(sess.workbuddyCredits + ' 分')
+      // 阿里云只显示 token，不给金额（实测偏差过大）
+      if (Number(sess.aliyunTokens) > 0) mine.push('阿里云 ' + Math.round(sess.aliyunTokens / 1000) + 'K tok')
+      body.appendChild(row('本次会话 ' + sess.turns + ' 轮',
+        mine.length ? mine.join(' / ') : '0',
+        null, mine.length ? 'warn' : 'free'))
+    }
+
+    // 主动省钱建议（最重要，放最上面显眼位置）
+    if (reco && reco.advice && reco.advice.message) {
+      var adv = reco.advice
+      var cls = adv.level === 'switch' ? 'dshcw-tip' : (adv.level === 'suggest' ? 'dshcw-suggest' : 'dshcw-ok')
+      var icon = adv.level === 'switch' ? '⚠ ' : (adv.level === 'suggest' ? '💡 ' : '✓ ')
+      body.appendChild(el('div', cls, icon + adv.message))
+    }
 
     // 时段推荐
     if (reco && reco.ok) {
@@ -269,8 +291,9 @@
     Promise.all([
       fetchJson('/cost-tracker/summary'),
       fetchJson('/cost-tracker/recommend'),
+      fetchJson('/cost-tracker/session'),
     ]).then(function (res) {
-      render(res[0], res[1])
+      render(res[0], res[1], res[2])
       lastReco = res[1]
     }).catch(function () {
       var body = root && root.querySelector('.dshcw-body')
