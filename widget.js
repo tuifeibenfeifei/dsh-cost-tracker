@@ -267,19 +267,9 @@
       body.appendChild(rl)
     }
 
-    // 限流提示（实时）
-    if (reco && reco.limited && reco.limited.length) {
-      for (var k = 0; k < reco.limited.length; k++) {
-        var lm = reco.limited[k]
-        body.appendChild(el('div', 'dshcw-tip', '⚠ ' + lm.id + ' 已限流，' + fmtLeft(lm.leftMs) + '后恢复，建议切换模型'))
-      }
-    }
-
-    // 免费额度用尽提示（实时）
-    if (reco && reco.live && reco.live.freeExhausted && reco.live.freeExhausted.length) {
-      body.appendChild(el('div', 'dshcw-tip',
-        '⚠ 免费额度已用尽：' + reco.live.freeExhausted.join('、') + '，已改按付费倍率推荐'))
-    }
+    // 注：限流/额度用尽的详细信息**不在挂件里显示**，
+    // 统一放在模型列表的悬停说明里（用户要求）。
+    // 这里只在「当前模型不可用」时由 advice 给一句总括提示。
   }
 
   // ---------- 数据 ----------

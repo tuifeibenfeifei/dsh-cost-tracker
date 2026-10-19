@@ -101,6 +101,8 @@ window.__ModuleLoader__.load({
             map[m.id] = {
               rateLimited: m.rateLimited === true,
               rateLimitedUntil: typeof m.rateLimitedUntil === 'number' ? m.rateLimitedUntil : null,
+              rateLimitedApprox: m.rateLimitedApprox === true,
+              quotaExhaustedAt: typeof m.quotaExhaustedAt === 'number' ? m.quotaExhaustedAt : null,
               contextOverflowAt: typeof m.contextOverflowAt === 'number' ? m.contextOverflowAt : null,
             }
           }
@@ -242,7 +244,15 @@ window.__ModuleLoader__.load({
      * 悬停说明：
      *   1) 倍率
      *   2) 促销/折扣说明
-     *   3) **限额状态**——被限流时明确告知何时恢复
+     *   3) **可用状态**——额度用尽 / 限流时明确告知何时能再用
+     *
+     * 数据来源三条（优先级从高到低）：
+     *   a) 上游 429 报文里的精确重置时间（rateLimitedUntil）
+     *   b) 本地记录的额度用尽（quotaExhaustedAt，免费模型 429 = 每日赠额用尽）
+     *   c) 都没有则显示「可用」
+     *
+     * 注意：WorkBuddy 的 status 接口**不返回**额度/限流状态，
+     * 所以只能靠 429 事件累积。没触发过 429 的模型显示为可用。
      */
     function buildHoverLines(modelId, meta) {
       const lines = []
@@ -257,15 +267,23 @@ window.__ModuleLoader__.load({
         lines.push(String(meta.badges.join(' · ')))
       }
 
-      // 限额状态：来自 /cost-tracker/model-limits 的实时数据
+      // ===== 可用状态 =====
       const lim = (limitCache && limitCache[modelId]) || {}
-      if (lim.rateLimited && lim.rateLimitedUntil) {
-        const left = lim.rateLimitedUntil - Date.now()
-        if (left > 0) {
-          lines.push('⚠ 已限流：' + fmtUntil(lim.rateLimitedUntil) + ' 恢复（还剩 ' + fmtLeftMs(left) + '）')
-        } else {
-          lines.push('限流已结束，可正常使用')
-        }
+      const now = Date.now()
+      const until = lim.rateLimitedUntil
+      const left = typeof until === 'number' ? until - now : null
+
+      if (left !== null && left > 0) {
+        // 免费模型 429 = 每日赠额用尽；付费模型 = 临时限流
+        const label = meta.free ? '额度已用尽' : '已限流'
+        const approx = lim.rateLimitedApprox ? '（估算）' : ''
+        lines.push('⛔ ' + label + '：' + fmtUntil(until) + ' 恢复' + approx
+          + '，还剩 ' + fmtLeftMs(left))
+      } else if (lim.quotaExhaustedAt && meta.free) {
+        // 记过额度用尽但没拿到恢复时间
+        lines.push('⛔ 额度已用尽，等待每日重置后才能再用')
+      } else if (lim.rateLimited && left !== null && left <= 0) {
+        lines.push('✅ 限流已结束，可正常使用')
       }
 
       if (lim.contextOverflowAt) {
