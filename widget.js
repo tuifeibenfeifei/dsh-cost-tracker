@@ -234,19 +234,11 @@
           var m = sc.models[j]
           var line = el('div', null)
           line.appendChild(el('b', null, m.rank + '. '))
+          // 挂件只显示模型名，思考强度等细节留给模型列表的悬停说明
           var label = m.name
           if (m.free) label += '（免费）'
           else if (m.outOfQuota) label += '（额度尽 x' + m.rate + '）'
-          else label += '（x' + m.rate + '）'
           line.appendChild(document.createTextNode(label))
-          // 思考强度：同倍率下它决定实际输出 token 量，直接显示出来
-          if (m.effortLabel) {
-            var eff = el('span', null, ' · ' + m.effortLabel)
-            eff.style.opacity = '.7'
-            eff.style.fontSize = '10px'
-            eff.style.marginLeft = '4px'
-            line.appendChild(eff)
-          }
           rl.appendChild(line)
         }
       }

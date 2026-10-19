@@ -181,7 +181,35 @@ window.__ModuleLoader__.load({
       return tags
     }
 
-    /** 悬停两行：倍率 + 促销说明 */
+    /** 剩余时间人类可读 */
+    function fmtLeftMs(ms) {
+      if (typeof ms !== 'number' || !isFinite(ms) || ms <= 0) return '已恢复'
+      const s = Math.floor(ms / 1000)
+      const d = Math.floor(s / 86400)
+      const h = Math.floor((s % 86400) / 3600)
+      const m = Math.floor((s % 3600) / 60)
+      if (d > 0) return d + ' 天 ' + h + ' 小时'
+      if (h > 0) return h + ' 小时 ' + m + ' 分'
+      if (m > 0) return m + ' 分'
+      return s + ' 秒'
+    }
+
+    /** 精确到分钟的恢复时刻，例如「2026-10-20 18:07」 */
+    function fmtUntil(ts) {
+      try {
+        const d = new Date(ts)
+        const pad = (n) => String(n).padStart(2, '0')
+        return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+          ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes())
+      } catch { return '' }
+    }
+
+    /**
+     * 悬停说明：
+     *   1) 倍率
+     *   2) 促销/折扣说明
+     *   3) **限额状态**——被限流时明确告知何时恢复
+     */
     function buildHoverLines(modelId, meta) {
       const lines = []
       lines.push(meta.free ? '免费' : (fmtRate(meta.credits) || '倍率未知'))
@@ -194,6 +222,22 @@ window.__ModuleLoader__.load({
       } else if (meta.badges && meta.badges.length) {
         lines.push(String(meta.badges.join(' · ')))
       }
+
+      // 限额状态：来自 /cost-tracker/model-limits 的实时数据
+      const lim = (limitCache && limitCache[modelId]) || {}
+      if (lim.rateLimited && lim.rateLimitedUntil) {
+        const left = lim.rateLimitedUntil - Date.now()
+        if (left > 0) {
+          lines.push('⚠ 已限流：' + fmtUntil(lim.rateLimitedUntil) + ' 恢复（还剩 ' + fmtLeftMs(left) + '）')
+        } else {
+          lines.push('限流已结束，可正常使用')
+        }
+      }
+
+      if (lim.contextOverflowAt) {
+        lines.push('⚠ 上次因上下文过长失败，请精简或新建任务')
+      }
+
       return lines
     }
 
@@ -299,12 +343,31 @@ window.__ModuleLoader__.load({
         whiteSpace: 'normal',
       }
 
-      const node = h('div', { ref: tipRef, style: box }, lines.map((ln, i) => h('span', {
-        key: 'l' + i,
-        style: i === 0
-          ? { fontWeight: 800, fontSize: '20px', lineHeight: '28px', color: '#ffffff' }
-          : { color: '#e5e7eb', fontSize: '18px', lineHeight: '26px', fontWeight: 400 },
-      }, ln)))
+      const node = h('div', { ref: tipRef, style: box }, lines.map((ln, i) => {
+        // 限流/失败提示行：红底高亮，和普通说明区分开
+        if (typeof ln === 'string' && ln.indexOf('⚠') === 0) {
+          return h('span', {
+            key: 'l' + i,
+            style: {
+              marginTop: '4px',
+              padding: '6px 9px',
+              borderRadius: '6px',
+              background: 'rgba(220,38,38,.18)',
+              border: '1px solid rgba(248,113,113,.45)',
+              color: '#fecaca',
+              fontSize: '17px',
+              lineHeight: '24px',
+              fontWeight: 600,
+            },
+          }, ln)
+        }
+        return h('span', {
+          key: 'l' + i,
+          style: i === 0
+            ? { fontWeight: 800, fontSize: '20px', lineHeight: '28px', color: '#ffffff' }
+            : { color: '#e5e7eb', fontSize: '18px', lineHeight: '26px', fontWeight: 400 },
+        }, ln)
+      }))
 
       const reactDom = require('react-dom')
       if (reactDom && reactDom.createPortal && typeof document !== 'undefined' && document.body) {
@@ -334,6 +397,13 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         if (badgeCache === null) refreshBadges()
       }, [])
+
+      // 悬停期间每秒重绘，让「还剩 X 分 Y 秒」实时跳动
+      useEffect(() => {
+        if (!hover) return undefined
+        const t = setInterval(() => tick(x => x + 1), 1000)
+        return () => clearInterval(t)
+      }, [hover])
 
       useEffect(() => () => {
         if (leaveTimer.current) clearTimeout(leaveTimer.current)
@@ -412,6 +482,14 @@ window.__ModuleLoader__.load({
       )
 
       refreshBadges()
+      // 限流状态也要拉：悬停说明里要显示「何时恢复」
+      refreshLimits()
+
+      // 悬停说明里的倒计时需要持续刷新，30 秒重拉一次限流状态
+      ctx.effect(() => {
+        const t = setInterval(() => { refreshLimits() }, 30000)
+        return () => clearInterval(t)
+      }, 'cost-tracker: limits refresh')
 
       ctx.effect(() => {
         const dispose = ctx.slots.inject('conversation.input.model.label', () =>
