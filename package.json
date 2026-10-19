@@ -1,8 +1,8 @@
 {
   "name": "dsh-cost-tracker",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "displayName": "DSH Cost Tracker",
-  "description": "DSH 多平台费用追踪：按模型自动切换计费口径，每轮对话结束结算花费，阿里云抵用券余额校准，WorkBuddy 账号健康监控与模型常用度徽章。",
+  "description": "DSH 多平台费用追踪：三平台余额挂件、分时段省钱推荐、按模型自动切换计费口径，阿里云抵用券余额校准，WorkBuddy 模型标签。",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -13,6 +13,7 @@
   "files": [
     "lib",
     "client.js",
+    "widget.js",
     "cordis.patch.yml",
     "icon.svg",
     "README.md",
