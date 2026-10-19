@@ -233,21 +233,30 @@
         for (var j = 0; j < sc.models.length; j++) {
           var m = sc.models[j]
           var line = el('div', null)
-          var b = el('b', null, m.rank + '. ')
-          line.appendChild(b)
-          line.appendChild(document.createTextNode(m.name + (m.free ? '（免费）' : '')))
+          line.appendChild(el('b', null, m.rank + '. '))
+          var label = m.name
+          if (m.free) label += '（免费）'
+          else if (m.outOfQuota) label += '（额度尽 x' + m.rate + '）'
+          else label += '（x' + m.rate + '）'
+          line.appendChild(document.createTextNode(label))
           rl.appendChild(line)
         }
       }
       body.appendChild(rl)
     }
 
-    // 限流提示
+    // 限流提示（实时）
     if (reco && reco.limited && reco.limited.length) {
       for (var k = 0; k < reco.limited.length; k++) {
         var lm = reco.limited[k]
         body.appendChild(el('div', 'dshcw-tip', '⚠ ' + lm.id + ' 已限流，' + fmtLeft(lm.leftMs) + '后恢复，建议切换模型'))
       }
+    }
+
+    // 免费额度用尽提示（实时）
+    if (reco && reco.live && reco.live.freeExhausted && reco.live.freeExhausted.length) {
+      body.appendChild(el('div', 'dshcw-tip',
+        '⚠ 免费额度已用尽：' + reco.live.freeExhausted.join('、') + '，已改按付费倍率推荐'))
     }
   }
 
