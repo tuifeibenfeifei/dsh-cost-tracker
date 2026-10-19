@@ -16,3 +16,6 @@ pnpm-lock.yaml
 .idea/
 .DS_Store
 Thumbs.db
+
+# 未启用的前端半身（按真实 slot 协议重写后再放开）
+client.js.disabled
