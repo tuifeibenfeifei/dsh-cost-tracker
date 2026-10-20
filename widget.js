@@ -21,6 +21,16 @@
   var STORE_KEY = 'dsh-cost-widget-pos'
   var REFRESH_MS = 60000
 
+  // 分类映射：阿里云按使用方向，WorkBuddy 按档位，其余 provider 平铺
+  var ALIYUN_CATEGORIES = [
+    { key: 'text',   label: '文本对话', match: [/^deepseek-v4\.1-flash/, /^vanchin\/deepseek-v4\.1/, /^qwen3\.8-max/, /^kimi-k3$/, /^qwen3-coder-flash/, /^deepseek-v4\.1-flash-1017/] },
+    { key: 'img',    label: '图片',     match: [/^qwen-image/, /^wan[\d.]*-image/, /^z-image/] },
+    { key: 'mt',     label: '翻译字幕', match: [/^qwen-mt/] },
+    { key: 'speech', label: '实时语音', match: [/audio|omni|livetranslate|tts|s2s|speech|asr|fun-asr/i] },
+    { key: 'ocr',    label: 'OCR/研究', match: [/ocr|deep-research|deep-search|analysis|gui-plus|flash-character/i] },
+  ]
+  var WB_FREE = [/^hy3$/, /^step-5-preview$/]
+  var WB_MAIN = [/^deepseek-v4\.1-flash$/]
   // ---------- 样式 ----------
   function injectCss() {
     if (document.getElementById(CSS_ID)) return
@@ -43,6 +53,24 @@
       '.dshcw-tip{margin-top:2px;padding:5px 7px;border-radius:6px;background:rgba(252,165,165,.14);border:1px solid rgba(252,165,165,.32);color:#fecaca;font-size:11px;line-height:15px}',
       '.dshcw-suggest{margin-top:2px;padding:5px 7px;border-radius:6px;background:rgba(251,191,36,.14);border:1px solid rgba(251,191,36,.34);color:#fde68a;font-size:11px;line-height:15px}',
       '.dshcw-ok{margin-top:2px;padding:5px 7px;border-radius:6px;background:rgba(74,222,128,.12);border:1px solid rgba(74,222,128,.28);color:#bbf7d0;font-size:11px;line-height:15px}',
+      // —— 树形模型选择器 ——
+      '.dshcw-mtree{position:fixed;z-index:13000;width:260px;max-height:60vh;overflow:auto;background:#111827;color:#fff;border:1px solid rgba(255,255,255,.18);border-radius:10px;box-shadow:0 14px 40px rgba(0,0,0,.5);font-size:12px;padding:6px}',
+      '.dshcw-mtree-head{display:flex;align-items:center;justify-content:space-between;padding:4px 6px 8px;font-weight:700;font-size:12px;color:#9ca3af}',
+      '.dshcw-mtree-close{cursor:pointer;opacity:.7;padding:0 4px}',
+      '.dshcw-mtree-close:hover{opacity:1}',
+      '.dshcw-mgroup{margin:2px 0}',
+      '.dshcw-mgroup-label{display:flex;align-items:center;gap:6px;padding:5px 6px;border-radius:6px;cursor:pointer;font-weight:700}',
+      '.dshcw-mgroup-label:hover{background:rgba(255,255,255,.07)}',
+      '.dshcw-mcaret{width:10px;flex:none;opacity:.6;font-size:10px}',
+      '.dshcw-mdot{width:8px;height:8px;border-radius:50%;flex:none}',
+      '.dshcw-mcat{margin-left:16px}',
+      '.dshcw-mcat-label{display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:6px;cursor:pointer;color:#d1d5db}',
+      '.dshcw-mcat-label:hover{background:rgba(255,255,255,.06)}',
+      '.dshcw-mitem{margin-left:34px;padding:4px 6px;border-radius:6px;cursor:pointer;color:#e5e7eb;display:flex;align-items:center;justify-content:space-between;gap:6px}',
+      '.dshcw-mitem:hover{background:rgba(59,130,246,.25)}',
+      '.dshcw-mitem.cur{background:rgba(59,130,246,.4);font-weight:700}',
+      '.dshcw-mitem .eff{color:#9ca3af;font-size:10px}',
+      '.dshcw-mempty{padding:10px;color:#9ca3af;text-align:center}',
       '.dshcw-empty{padding:8px 10px;font-size:11px;color:#9ca3af}',
       '.dshcw-hidden .dshcw-body{display:none}',
       '.dshcw-hidden .dshcw-head{border-bottom:none}',
@@ -106,6 +134,16 @@
     var title = el('div', 'dshcw-title')
     title.appendChild(el('span', null, '💰'))
     title.appendChild(el('span', null, '费用'))
+    // 「模型」按钮：打开树形选择器（与费用折叠互不影响）
+    var mb = el('span', null, '🌳')
+    mb.style.cursor = 'pointer'
+    mb.style.marginLeft = '4px'
+    mb.title = '按分类选模型'
+    mb.addEventListener('click', function (e) {
+      e.stopPropagation()
+      toggleModelTree(mb)
+    })
+    title.appendChild(mb)
     head.appendChild(title)
     var toggle = el('span', 'dshcw-toggle', '▾')
     head.appendChild(toggle)
@@ -286,6 +324,218 @@
     // 注：限流/额度用尽的详细信息**不在挂件里显示**，
     // 统一放在模型列表的悬停说明里（用户要求）。
     // 这里只在「当前模型不可用」时由 advice 给一句总括提示。
+  }
+
+  // ---------- 树形模型选择器 ----------
+  // 数据来自 ctx.remote.session.modelCatalog() / selectModel()——
+  // 这两个是 DSH 内核 api-session-controller 暴露的 Remote 方法，
+  // 页面脚本可通过 window 里已注入的 typert 客户端访问；取不到就走降级路径。
+  function findRemoteSession() {
+    try {
+      // DSH 前端把 remote 命名空间挂在多个位置，逐个探测
+      var cands = [window.__DSH__, window.dsh, (window.__DSH_BOOT__ || {}).remote]
+      for (var i = 0; i < cands.length; i++) {
+        var c = cands[i]
+        if (c && c.remote && c.remote.session) return c.remote.session
+      }
+      // 常见形态：全局 require 缓存 / ModuleLoader
+      if (window.__ModuleLoader__ && typeof window.__ModuleLoader__.service === 'function') {
+        var svc = window.__ModuleLoader__.service('session')
+        if (svc && svc.remote) return svc.remote
+      }
+    } catch (e) {}
+    return null
+  }
+
+  var mtreeOpen = false
+  var mtreeEl = null
+  var mtreeState = null // { groups, default, byId }
+
+  function toggleModelTree(anchor) {
+    if (mtreeOpen) { closeModelTree(); return }
+    openModelTree(anchor)
+  }
+
+  function closeModelTree() {
+    if (mtreeEl) { mtreeEl.remove(); mtreeEl = null }
+    mtreeOpen = false
+  }
+
+  function openModelTree(anchor) {
+    closeModelTree()
+    mtreeOpen = true
+    mtreeEl = el('div', 'dshcw-mtree')
+    mtreeEl.appendChild(el('div', 'dshcw-mtree-head', '按分类选模型'))
+    var closeBtn = el('span', 'dshcw-mtree-close', '✕')
+    closeBtn.addEventListener('click', closeModelTree)
+    mtreeEl.lastChild.appendChild(closeBtn)
+    mtreeEl.appendChild(el('div', 'dshcw-mempty', '加载模型目录…'))
+    ;(document.body || document.documentElement).appendChild(mtreeEl)
+
+    // 定位：锚点按钮左下
+    var r = anchor.getBoundingClientRect()
+    var left = Math.max(4, Math.min(r.left - 120, (window.innerWidth || 1200) - 270))
+    var top = Math.min(r.bottom + 6, (window.innerHeight || 800) - 200)
+    mtreeEl.style.left = left + 'px'
+    mtreeEl.style.top = top + 'px'
+
+    loadCatalogAndRender()
+  }
+
+  function loadCatalogAndRender() {
+    var remote = findRemoteSession()
+    var p = remote && typeof remote.modelCatalog === 'function'
+      ? Promise.resolve(remote.modelCatalog())
+      : Promise.reject(new Error('remote session API 不可用'))
+    p.then(function (cat) {
+      mtreeState = cat
+      renderModelTree()
+    }).catch(function (err) {
+      mtreeEl.textContent = ''
+      mtreeEl.appendChild(el('div', 'dshcw-mempty', '模型目录加载失败：' + String(err && err.message || err).slice(0, 60)))
+    })
+  }
+
+  /** 把 provider 的模型分到分类桶里；不属于任何分类的归「其他」 */
+  function categorize(providerId, models) {
+    var buckets = []
+    function bucket(label) {
+      for (var i = 0; i < buckets.length; i++) if (buckets[i].label === label) return buckets[i]
+      var b = { label: label, models: [] }
+      buckets.push(b)
+      return b
+    }
+    if (providerId === 'aliyun' || /aliyun|dashscope/i.test(providerId)) {
+      for (var i = 0; i < models.length; i++) {
+        var m = models[i]
+        var placed = false
+        for (var c = 0; c < ALIYUN_CATEGORIES.length; c++) {
+          var cat = ALIYUN_CATEGORIES[c]
+          for (var r = 0; r < cat.match.length; r++) {
+            if (cat.match[r].test(m.id)) { bucket(cat.label).models.push(m); placed = true; break }
+          }
+          if (placed) break
+        }
+        if (!placed) bucket('其他').models.push(m)
+      }
+    } else if (/workbuddy/i.test(providerId)) {
+      for (var j = 0; j < models.length; j++) {
+        var mm = models[j], pb = false
+        for (var a = 0; a < WB_FREE.length; a++) if (WB_FREE[a].test(mm.id)) { bucket('免费').models.push(mm); pb = true; break }
+        if (pb) continue
+        for (var b2 = 0; b2 < WB_MAIN.length; b2++) if (WB_MAIN[b2].test(mm.id)) { bucket('主力').models.push(mm); pb = true; break }
+        if (pb) continue
+        bucket('其他').models.push(mm)
+      }
+    }
+    return buckets
+  }
+
+  function renderModelTree() {
+    if (!mtreeEl || !mtreeState) return
+    mtreeEl.textContent = ''
+    var head = el('div', 'dshcw-mtree-head', '按分类选模型')
+    var closeBtn = el('span', 'dshcw-mtree-close', '✕')
+    closeBtn.addEventListener('click', closeModelTree)
+    head.appendChild(closeBtn)
+    mtreeEl.appendChild(head)
+
+    var groups = mtreeState.groups || []
+    var def = mtreeState.default || {}
+    if (!groups.length) {
+      mtreeEl.appendChild(el('div', 'dshcw-mempty', '没有可用模型'))
+      return
+    }
+
+    groups.forEach(function (g) {
+      var gEl = el('div', 'dshcw-mgroup')
+      var dotColor = /deepseek-account/i.test(g.id) ? '#ef4444'
+        : /aliyun|dashscope/i.test(g.id) ? '#f59e0b'
+        : /workbuddy/i.test(g.id) ? '#22c55e'
+        : /deepseek/i.test(g.id) ? '#ef4444' : '#8b5cf6'
+      var gLabel = el('div', 'dshcw-mgroup-label')
+      gLabel.appendChild(el('span', 'dshcw-mcaret', '▸'))
+      var dot = el('span', 'dshcw-mdot'); dot.style.background = dotColor
+      gLabel.appendChild(dot)
+      gLabel.appendChild(el('span', null, g.name || g.id))
+      gLabel.appendChild(el('span', null, '（' + g.models.length + '）'))
+      gEl.appendChild(gLabel)
+
+      var bodyWrap = el('div')
+      bodyWrap.style.display = 'none'
+      gEl.appendChild(bodyWrap)
+
+      // 分桶：阿里云/WorkBuddy 有分类，其他平铺
+      var cats = categorize(g.id, g.models)
+      if (cats.length) {
+        cats.forEach(function (cat) {
+          var cEl = el('div', 'dshcw-mcat')
+          var cLabel = el('div', 'dshcw-mcat-label')
+          cLabel.appendChild(el('span', 'dshcw-mcaret', '▸'))
+          cLabel.appendChild(el('span', null, cat.label))
+          cLabel.appendChild(el('span', null, '（' + cat.models.length + '）'))
+          cEl.appendChild(cLabel)
+          var cBody = el('div'); cBody.style.display = 'none'
+          cEl.appendChild(cBody)
+          cat.models.forEach(function (m) { cBody.appendChild(modelRow(g, m, def)) })
+          cLabel.addEventListener('click', function () {
+            var open = cBody.style.display !== 'none'
+            cBody.style.display = open ? 'none' : 'block'
+            cLabel.querySelector('.dshcw-mcaret').textContent = open ? '▸' : '▾'
+          })
+          bodyWrap.appendChild(cEl)
+        })
+      } else {
+        g.models.forEach(function (m) { bodyWrap.appendChild(modelRow(g, m, def)) })
+      }
+
+      gLabel.addEventListener('click', function (e) {
+        if (e.target !== gLabel && e.target !== gLabel.lastChild) {
+          // 点在 dot/文字上也算
+        }
+        var open = bodyWrap.style.display !== 'none'
+        bodyWrap.style.display = open ? 'none' : 'block'
+        gLabel.querySelector('.dshcw-mcaret').textContent = open ? '▸' : '▾'
+      })
+
+      mtreeEl.appendChild(gEl)
+    })
+  }
+
+  function modelRow(group, model, def) {
+    var isCur = def && def.provider === group.id && def.model === model.id
+    var row = el('div', 'dshcw-mitem' + (isCur ? ' cur' : ''))
+    var nameSpan = el('span', null, model.name || model.id)
+    row.appendChild(nameSpan)
+    if (model.reasoning && model.reasoning.defaultEffort) {
+      row.appendChild(el('span', 'eff', model.reasoning.defaultEffort))
+    }
+    row.addEventListener('click', function () {
+      pickModel(group.id, model, def)
+    })
+    return row
+  }
+
+  function pickModel(providerId, model, def) {
+    var remote = findRemoteSession()
+    if (!remote || typeof remote.selectModel !== 'function') {
+      alert('切换接口不可用（内核 Remote API 未暴露），请用自带模型选择器')
+      return
+    }
+    var sessionId = def && def.sessionId
+    var payload = {
+      provider: providerId,
+      model: model.id,
+      ...(model.reasoning && model.reasoning.defaultEffort ? { reasoningEffort: model.reasoning.defaultEffort } : {})
+    }
+    if (sessionId) payload.sessionId = sessionId
+    Promise.resolve(remote.selectModel(payload)).then(function () {
+      closeModelTree()
+      if (mtreeEl) mtreeEl.remove()
+      // 重新打开会刷新选中态
+    }).catch(function (err) {
+      alert('切换失败：' + String(err && err.message || err).slice(0, 80))
+    })
   }
 
   // ---------- 数据 ----------
