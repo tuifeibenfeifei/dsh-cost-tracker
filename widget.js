@@ -26,12 +26,12 @@
     if (document.getElementById(CSS_ID)) return
     var css = [
       '.dshcw-root{position:fixed;z-index:12000;font-family:var(--dsw-font-family,system-ui,-apple-system,"Segoe UI",sans-serif);font-size:13px;user-select:none}',
-      '.dshcw-card{background:#1f2937;color:#fff;border:1px solid rgba(255,255,255,.16);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.32);overflow:hidden;min-width:190px}',
+      '.dshcw-card{background:#1f2937;color:#fff;border:1px solid rgba(255,255,255,.16);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.32);overflow:hidden;width:230px}',
       '.dshcw-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 10px;cursor:pointer;font-weight:700;font-size:12px;letter-spacing:.3px}',
-      '.dshcw-title{display:flex;align-items:center;gap:5px}',
-      '.dshcw-toggle{opacity:.6;font-size:11px;padding:0 2px}',
+      '.dshcw-title{display:flex;align-items:center;gap:5px;flex:none}',
+      '.dshcw-toggle{opacity:.6;font-size:11px;padding:0 2px;flex:none}',
       '.dshcw-body{padding:0 10px 9px;display:flex;flex-direction:column;gap:5px}',
-      '.dshcw-row{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12px;line-height:17px}',
+      '.dshcw-row{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12px;line-height:17px;white-space:nowrap}',
       '.dshcw-label{color:#9ca3af;display:flex;align-items:center;gap:5px}',
       '.dshcw-dot{width:7px;height:7px;border-radius:50%;flex:none}',
       '.dshcw-val{font-weight:700;font-variant-numeric:tabular-nums}',
@@ -139,7 +139,10 @@
 
   function applyPos(p) {
     if (!root || !p) return
-    var maxL = (window.innerWidth || 1200) - 60
+    // 钳制时保留卡片完整宽度：不能让卡片被推到视口外被挤压换行。
+    // CARD_W 必须与 CSS 里 .dshcw-card 的 width 一致。
+    var CARD_W = 230
+    var maxL = (window.innerWidth || 1200) - CARD_W - 4
     var maxT = (window.innerHeight || 800) - 40
     root.style.left = Math.max(0, Math.min(p.left, maxL)) + 'px'
     root.style.top = Math.max(0, Math.min(p.top, maxT)) + 'px'
@@ -207,7 +210,7 @@
 
     // WorkBuddy（积分）
     body.appendChild(row('WorkBuddy', wb && wb.credits !== null && wb.credits !== undefined
-      ? wb.credits + ' 分' : '—', '#22c55e', 'free'))
+      ? wb.credits + ' 积分' : '—', '#22c55e', 'free'))
 
     body.appendChild(el('div', 'dshcw-sep'))
 
@@ -219,7 +222,7 @@
         var one = []
         if (Number(lt.costTokenBased) > 0) one.push('¥' + fmtNum(lt.costTokenBased))
         if (lt.workbuddy && typeof lt.workbuddy.spent === 'number' && lt.workbuddy.spent > 0) {
-          one.push(lt.workbuddy.spent + ' 分')
+          one.push(lt.workbuddy.spent + ' 积分')
         }
         body.appendChild(row('单轮 #' + lt.turn, one.length ? one.join(' / ') : '免费', null, one.length ? 'warn' : 'free'))
       }
@@ -229,13 +232,13 @@
       var m = ledger.month || {}
       var dParts = []
       if (Number(d.costTokenBased) > 0) dParts.push('¥' + fmtNum(d.costTokenBased))
-      if (Number(d.workbuddyCredits) > 0) dParts.push(d.workbuddyCredits + ' 分')
+      if (Number(d.workbuddyCredits) > 0) dParts.push(d.workbuddyCredits + ' 积分')
       body.appendChild(row('今天 ' + (d.turns || 0) + ' 轮',
         dParts.length ? dParts.join(' / ') : '0', null, dParts.length ? 'warn' : 'free'))
 
       var mParts = []
       if (Number(m.costTokenBased) > 0) mParts.push('¥' + fmtNum(m.costTokenBased))
-      if (Number(m.workbuddyCredits) > 0) mParts.push(m.workbuddyCredits + ' 分')
+      if (Number(m.workbuddyCredits) > 0) mParts.push(m.workbuddyCredits + ' 积分')
       body.appendChild(row('本月 ' + (m.turns || 0) + ' 轮',
         mParts.length ? mParts.join(' / ') : '0', null, mParts.length ? 'warn' : 'free'))
 
