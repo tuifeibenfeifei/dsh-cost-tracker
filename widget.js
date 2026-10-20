@@ -170,46 +170,54 @@
     window.addEventListener('resize', function () {
       if (root.style.display !== 'none') positionPanel()
     })
-    injectSidebarButton()
+    mountSidebarButton()
     return body
   }
 
   /**
-   * 在侧栏账户行里加 💰 按钮（与头像**同一行**）。
+   * 侧栏 💰 按钮：**独立浮层**，定位覆盖在账户行右端。
    *
-   * 为什么不用 slot：sidebar.footer.action 会被 shell 渲染成独立一行，
-   * 无法与账户按钮同排。所以用页面脚本直接找账户按钮所在的行容器，
-   * 把 💰 追加进去。shell 重渲染侧栏时按钮可能被清掉，用定时器保活。
+   * ⚠️ 绝不能向 DSH 的 React 节点里 appendChild ——
+   * React 下次重渲染那个行时发现未知子节点会抛错，整个界面白屏
+   * （2026-10-20 实测崩溃教训）。所以这里自建 fixed 定位元素，
+   * 只跟随账户行的坐标，不碰它的 DOM 树。
    */
-  function injectSidebarButton() {
-    var btn = null
-    function tryInject() {
-      if (btn && document.contains(btn)) return true
+  function mountSidebarButton() {
+    var btn = document.createElement('button')
+    btn.textContent = '💰'
+    btn.title = '费用'
+    btn.style.cssText = 'position:fixed;z-index:12005;width:26px;height:22px;' +
+      'display:none;align-items:center;justify-content:center;' +
+      'background:transparent;border:none;cursor:pointer;font-size:14px;' +
+      'line-height:22px;padding:0;border-radius:6px;opacity:.85;' +
+      'transition:background .15s'
+    btn.addEventListener('mouseenter', function () {
+      btn.style.background = 'rgba(127,127,127,.18)'
+      btn.style.opacity = '1'
+    })
+    btn.addEventListener('mouseleave', function () {
+      btn.style.background = 'transparent'
+      btn.style.opacity = '.85'
+    })
+    btn.addEventListener('click', function (e) {
+      e.stopPropagation()
+      if (window.__dshCostPanel) window.__dshCostPanel.toggle()
+    })
+    ;(document.body || document.documentElement).appendChild(btn)
+
+    function place() {
       var acc = findAccountButton()
-      if (!acc) return false
-      btn = document.createElement('button')
-      btn.textContent = '💰'
-      btn.title = '费用面板'
-      btn.style.cssText = 'background:none;border:none;cursor:pointer;font-size:14px;' +
-        'line-height:20px;padding:2px 6px;border-radius:6px;color:inherit;opacity:.85;flex:none'
-      btn.addEventListener('click', function (e) {
-        e.stopPropagation()
-        if (window.__dshCostPanel) window.__dshCostPanel.toggle()
-      })
-      // 插到账户按钮同一行的容器末尾（行容器 = 账户按钮的父节点）
-      var row = acc.parentElement
-      if (!row) return false
-      row.style.display = row.style.display || 'flex'
-      row.style.alignItems = 'center'
-      row.appendChild(btn)
-      return true
+      if (!acc) { btn.style.display = 'none'; return }
+      var r = acc.getBoundingClientRect()
+      if (r.width === 0 || r.height === 0) { btn.style.display = 'none'; return }
+      btn.style.display = 'flex'
+      // 贴账户行右端内侧（与头像同一行的视觉位置），垂直居中
+      btn.style.left = Math.max(2, r.right - 30) + 'px'
+      btn.style.top = (r.top + Math.max(0, (r.height - 22) / 2)) + 'px'
     }
-    // 账户行可能晚于本脚本出现：轮询注入 + 定期保活
-    var tries = 0
-    var iv = setInterval(function () {
-      if (tryInject() || ++tries > 60) clearInterval(iv)
-    }, 1000)
-    setInterval(function () { tryInject() }, 5000)
+    place()
+    setInterval(place, 2000)
+    window.addEventListener('resize', place)
   }
 
   /** 找账户按钮元素（区别于 findAccountArea 的坐标版） */
