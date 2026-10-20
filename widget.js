@@ -18,7 +18,6 @@
   window.__dshCostWidget = true
 
   var CSS_ID = 'dsh-cost-widget-css'
-  var STORE_KEY = 'dsh-cost-widget-pos'
   var SETTINGS_KEY = 'dsh-cost-widget-settings'
   var REFRESH_MS = 60000
 
@@ -50,8 +49,8 @@
   function injectCss() {
     if (document.getElementById(CSS_ID)) return
     var css = [
-      '.dshcw-root{position:fixed;z-index:12000;font-family:var(--dsw-font-family,system-ui,-apple-system,"Segoe UI",sans-serif);font-size:13px;user-select:none}',
-      '.dshcw-card{background:#1f2937;color:#fff;border:1px solid rgba(255,255,255,.16);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.32);overflow:hidden}',
+      '.dshcw-root{position:fixed;z-index:12000;font-family:var(--dsw-font-family,system-ui,-apple-system,"Segoe UI",sans-serif);font-size:13px;user-select:none;display:none}',
+      '.dshcw-card{background:#1f2937;color:#fff;border:1px solid rgba(255,255,255,.16);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.32);overflow:hidden;max-height:70vh;overflow-y:auto}',
       '.dshcw-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 10px;cursor:pointer;font-weight:700;font-size:12px;letter-spacing:.3px}',
       '.dshcw-title{display:flex;align-items:center;gap:5px;flex:none}',
       '.dshcw-toggle{opacity:.6;font-size:11px;padding:0 2px;flex:none}',
@@ -90,19 +89,7 @@
     ;(document.head || document.documentElement).appendChild(s)
   }
 
-  // ---------- 位置记忆 ----------
-  function loadPos() {
-    try {
-      var raw = localStorage.getItem(STORE_KEY)
-      if (!raw) return null
-      var p = JSON.parse(raw)
-      if (p && typeof p.left === 'number' && typeof p.top === 'number') return p
-    } catch (e) {}
-    return null
-  }
-  function savePos(p) {
-    try { localStorage.setItem(STORE_KEY, JSON.stringify(p)) } catch (e) {}
-  }
+  // （侧栏面板模式下不再有拖动/位置记忆——面板位置锚定账户区，固定不出界）
 
   function fmtNum(n) {
     if (typeof n !== 'number' || !isFinite(n)) return '—'
@@ -159,7 +146,7 @@
     body.appendChild(el('div', 'dshcw-empty', '加载中…'))
 
     head.addEventListener('click', function (e) {
-      if (e.target === toggle || dragging) return
+      if (e.target === toggle) return
       collapsed = !collapsed
       card.classList.toggle('dshcw-hidden', collapsed)
       toggle.textContent = collapsed ? '▸' : '▾'
@@ -170,58 +157,58 @@
     root.appendChild(card)
     ;(document.body || document.documentElement).appendChild(root)
 
-    // 初始位置：右下角，避开鲸鱼（往上偏移）
-    var pos = loadPos()
-    if (!pos) {
-      var vw = window.innerWidth || 1200
-      var vh = window.innerHeight || 800
-      pos = { left: vw - settings.cardWidth - 20, top: vh - 250 }
-    }
-    applyPos(pos)
-    enableDrag(head, card)
+    // 面板默认收起：点侧栏 💰 按钮才打开
+    root.style.display = 'none'
     // 应用用户设置
     applyCardWidth()
+    // 侧栏 💰 点击 → 开/关面板
+    window.addEventListener('dsh-cost-tracker:toggle', function () {
+      var show = root.style.display === 'none'
+      root.style.display = show ? 'block' : 'none'
+      if (show) positionPanel()
+    })
+    // 窗口变化时重新定位
+    window.addEventListener('resize', function () {
+      if (root.style.display !== 'none') positionPanel()
+    })
     return body
   }
 
-  function applyPos(p) {
-    if (!root || !p) return
-    // 四边都按卡片**实际尺寸**钳制：水平用设置里的宽度（可变），垂直用实际高度。
-    var card = root.firstElementChild
-    var w = (card && card.offsetWidth) || settings.cardWidth || 230
-    var h = (card && card.offsetHeight) || 160
-    var maxL = (window.innerWidth || 1200) - w - 4
-    var maxT = (window.innerHeight || 800) - h - 4
-    root.style.left = Math.max(0, Math.min(p.left, maxL)) + 'px'
-    root.style.top = Math.max(0, Math.min(p.top, maxT)) + 'px'
+  /** 找侧栏账户区（底部）的屏幕位置：返回 {left, top, width, height} 或 null */
+  function findAccountArea() {
+    try {
+      // DSH 的账户按钮由 settings.launcher slot 渲染。启发式查找：
+      // 左边缘贴屏幕左侧、位于屏幕下半部、可见的按钮 —— 侧栏底部的账户/设置按钮
+      var candidates = document.querySelectorAll('button')
+      var best = null
+      for (var i = 0; i < candidates.length; i++) {
+        var b = candidates[i]
+        var r = b.getBoundingClientRect()
+        if (r.width === 0 || r.height === 0) continue
+        if (r.left >= 0 && r.left < 60 && r.top > (window.innerHeight || 800) * 0.5 && r.height > 20 && r.height < 120) {
+          if (!best || r.top > best.top) best = { left: r.left, top: r.top, width: r.width, height: r.height }
+        }
+      }
+      return best
+    } catch (e) { return null }
   }
 
-  // ---------- 拖动 ----------
-  var dragging = false
-  function enableDrag(handle, card) {
-    var startX = 0, startY = 0, startL = 0, startT = 0
-    handle.classList.add('dshcw-drag')
-    handle.addEventListener('mousedown', function (e) {
-      if (e.button !== 0) return
-      dragging = true
-      startX = e.clientX; startY = e.clientY
-      var r = root.getBoundingClientRect()
-      startL = r.left; startT = r.top
-      e.preventDefault()
-    })
-    window.addEventListener('mousemove', function (e) {
-      if (!dragging) return
-      var p = { left: startL + (e.clientX - startX), top: startT + (e.clientY - startY) }
-      applyPos(p)
-    })
-    window.addEventListener('mouseup', function (e) {
-      if (!dragging) return
-      dragging = false
-      var r = root.getBoundingClientRect()
-      var p = { left: r.left, top: r.top }
-      savePos(p)
-    })
+  /** 面板定位：锚定账户区右侧、底对齐；找不到账户区就退回左下 */
+  function positionPanel() {
+    if (!root) return
+    var acc = findAccountArea()
+    var w = settings.cardWidth
+    if (acc) {
+      root.style.left = Math.max(4, acc.left + acc.width + 8) + 'px'
+      root.style.top = Math.max(4, acc.top + acc.height - (root.offsetHeight || 300)) + 'px'
+    } else {
+      root.style.left = '8px'
+      root.style.top = Math.max(4, (window.innerHeight || 800) - (root.offsetHeight || 300) - 12) + 'px'
+    }
+    root.style.width = w + 'px'
   }
+
+  // （拖动逻辑已随悬浮模式移除）
 
   // ---------- 渲染 ----------
   function row(label, value, dotColor, valClass) {
@@ -377,7 +364,7 @@
     } catch (e) {}
   }
 
-  /** 轮次结束气泡：出现在挂件正上方，4.5 秒后淡出 */
+  /** 轮次结束气泡：显示在账户区上方（用户要求的固定区域），4.5 秒后淡出 */
   function showTurnBubble(text) {
     try {
       var old = document.getElementById('dshcw-turn-bubble')
@@ -390,10 +377,16 @@
         'white-space:nowrap;opacity:0;transition:opacity .3s;pointer-events:none;' +
         'font-family:var(--dsw-font-family,system-ui,sans-serif)'
       ;(document.body || document.documentElement).appendChild(b)
-      // 定位：挂件上方（每次渲染后 root 位置可能被拖动过，现取现用）
-      var rr = root.getBoundingClientRect()
-      var left = Math.max(4, Math.min(rr.left, (window.innerWidth || 1200) - 220))
-      var top = Math.max(4, rr.top - 44)
+      // 定位：账户区上方（头像上方的固定区域）
+      var acc = findAccountArea()
+      var left, top
+      if (acc) {
+        left = Math.max(4, acc.left)
+        top = Math.max(4, acc.top - 44)
+      } else {
+        left = 8
+        top = (window.innerHeight || 800) - 160
+      }
       b.style.left = left + 'px'
       b.style.top = top + 'px'
       // 淡入
@@ -441,11 +434,8 @@
     try {
       var card = root && root.firstElementChild
       if (card) card.style.width = settings.cardWidth + 'px'
-      // 位置钳制用得上新宽度
-      if (root) {
-        var r = root.getBoundingClientRect()
-        applyPos({ left: r.left, top: r.top })
-      }
+      // 宽度变化后重新锚定账户区
+      if (root && root.style.display !== 'none') positionPanel()
     } catch (e) {}
   }
 
@@ -532,15 +522,12 @@
     r4.appendChild(wWrap)
     setEl.appendChild(r4)
 
-    // 底部：重置位置
+    // 底部：重置面板（重新锚定账户区 + 刷新数据）
     var foot = el('div', 'dshcw-setfoot')
-    var resetBtn = el('span', 'dshcw-btn danger', '重置位置')
-    resetBtn.title = '拖丢了的回滚手段：回到右下角默认位'
+    var resetBtn = el('span', 'dshcw-btn danger', '重新锚定面板')
+    resetBtn.title = '面板跑到奇怪位置时，重新对齐账户区'
     resetBtn.addEventListener('click', function () {
-      try { localStorage.removeItem(STORE_KEY) } catch (e) {}
-      var vw = window.innerWidth || 1200
-      var vh = window.innerHeight || 800
-      applyPos({ left: vw - settings.cardWidth - 20, top: vh - 300 })
+      positionPanel()
     })
     foot.appendChild(resetBtn)
     setEl.appendChild(foot)

@@ -554,6 +554,27 @@ window.__ModuleLoader__.load({
       }, nodes)
     }
 
+    /**
+     * 侧栏底部的费用按钮。
+     *
+     * slot 只给显示，点击行为通过 window 全局事件通知 widget.js
+     * （跨半身桥：widget.js 是独立页面脚本，监听这个事件开/关费用面板）。
+     */
+    function SidebarCostButton() {
+      return h('button', {
+        key: 'cost-btn',
+        title: '费用面板',
+        onClick: () => {
+          try { window.dispatchEvent(new window.CustomEvent('dsh-cost-tracker:toggle')) } catch { /* 忽略 */ }
+        },
+        style: {
+          background: 'none', border: 'none', cursor: 'pointer',
+          fontSize: '15px', lineHeight: '20px', padding: '2px 6px',
+          borderRadius: '6px', color: 'inherit', opacity: 0.85,
+        },
+      }, '💰')
+    }
+
     const inject = ['slots', 'locale']
 
     /**
@@ -602,6 +623,21 @@ window.__ModuleLoader__.load({
           }, CostTrackerModelLabel))
         return () => { try { dispose && dispose() } catch { /* 忽略 */ } }
       }, 'cost-tracker: model label')
+
+      // ===== 侧栏底部 💰 按钮（账户头像/设置旁的固定位置）=====
+      // slot 树实测：sidebar.footer.action 是 "Optional actions beside
+      // Settings at the sidebar foot"，list 型，无遮蔽风险。
+      // 点击后通知 widget.js 打开/收起费用面板。
+      ctx.effect(() => {
+        const dispose = ctx.slots.inject('sidebar.footer.action', () =>
+          ctx.slots.register({
+            name: 'sidebar.footer.action',
+            id: 'cost-tracker-panel',
+            order: 50,
+            label: '费用',
+          }, SidebarCostButton))
+        return () => { try { dispose && dispose() } catch { /* 忽略 */ } }
+      }, 'cost-tracker: sidebar button')
     }
 
     exports.apply = apply
