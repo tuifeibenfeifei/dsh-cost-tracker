@@ -26,7 +26,8 @@
     bubble: true,      // 轮次气泡
     sound: false,      // 提示音
     refreshSec: 60,    // 刷新间隔
-    cardWidth: 230,    // 卡片宽度
+    cardWidth: 230,    // 卡片宽度（预设档位或拖拽后的自定义值）
+    alwaysShow: false, // 常驻显示（不随 💰 收起，一直挂在账户区旁）
   }
   function loadSettings() {
     try {
@@ -36,7 +37,10 @@
         if (typeof s.bubble === 'boolean') settings.bubble = s.bubble
         if (typeof s.sound === 'boolean') settings.sound = s.sound
         if ([30, 60, 120, 300].indexOf(Number(s.refreshSec)) !== -1) settings.refreshSec = Number(s.refreshSec)
-        if ([230, 280, 330].indexOf(Number(s.cardWidth)) !== -1) settings.cardWidth = Number(s.cardWidth)
+        // 宽度：预设档位或 140–480 之间的自定义值（拖拽产生）
+        var w = Number(s.cardWidth)
+        if ([140, 230, 280, 330].indexOf(w) !== -1 || (w >= 140 && w <= 480)) settings.cardWidth = w
+        if (typeof s.alwaysShow === 'boolean') settings.alwaysShow = s.alwaysShow
       }
     } catch (e) {}
   }
@@ -50,7 +54,11 @@
     if (document.getElementById(CSS_ID)) return
     var css = [
       '.dshcw-root{position:fixed;z-index:12000;font-family:var(--dsw-font-family,system-ui,-apple-system,"Segoe UI",sans-serif);font-size:13px;user-select:none;display:none}',
-      '.dshcw-card{background:#1f2937;color:#fff;border:1px solid rgba(255,255,255,.16);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.32);overflow:hidden;max-height:70vh;overflow-y:auto}',
+      '.dshcw-card{background:#1f2937;color:#fff;border:1px solid rgba(255,255,255,.16);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.32);overflow:hidden;max-height:70vh;overflow-y:auto;position:relative}',
+      // 拖拽手柄：面板右下角
+      '.dshcw-resize{position:absolute;right:0;bottom:0;width:16px;height:16px;cursor:nwse-resize;opacity:.35}',
+      '.dshcw-resize:hover{opacity:.9}',
+      '.dshcw-resize::after{content:"";position:absolute;right:3px;bottom:3px;width:8px;height:8px;border-right:2px solid #9ca3af;border-bottom:2px solid #9ca3af}',
       '.dshcw-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 10px;cursor:pointer;font-weight:700;font-size:12px;letter-spacing:.3px}',
       '.dshcw-title{display:flex;align-items:center;gap:5px;flex:none}',
       '.dshcw-toggle{opacity:.6;font-size:11px;padding:0 2px;flex:none}',
@@ -151,12 +159,15 @@
 
     card.appendChild(head)
     card.appendChild(body)
+    // 拖拽手柄：右下角自由调宽
+    card.appendChild(el('div', 'dshcw-resize'))
     root.appendChild(card)
     ;(document.body || document.documentElement).appendChild(root)
 
-    // 面板默认隐藏；显隐只由侧栏账户行的 💰 按钮控制（不再自建悬浮卡）
+    // 面板默认隐藏；显隐由侧栏 💰 按钮与常驻设置共同控制
     root.style.display = 'none'
     applyCardWidth()
+    enableResize()
     // 暴露面板控制 API
     window.__dshCostPanel = {
       toggle: function () {
@@ -171,7 +182,43 @@
       if (root.style.display !== 'none') positionPanel()
     })
     mountSidebarButton()
+    // 常驻显示：跳过首次隐藏，面板一直开着
+    if (settings.alwaysShow) {
+      root.style.display = 'block'
+      positionPanel()
+      tick()
+    }
     return body
+  }
+
+  /**
+   * 右下角拖拽手柄：自由调整面板宽度（140–480px），松手持久化。
+   * 只改宽度，高度依旧自适应内容。
+   */
+  function enableResize() {
+    var card = root.firstElementChild
+    var handle = card.querySelector('.dshcw-resize')
+    if (!handle) return
+    var startX = 0, startW = 0, dragging = false
+    handle.addEventListener('mousedown', function (e) {
+      dragging = true
+      startX = e.clientX
+      startW = settings.cardWidth
+      e.preventDefault(); e.stopPropagation()
+    })
+    window.addEventListener('mousemove', function (ev) {
+      if (!dragging) return
+      // 向左拖 = 变宽（面板锚在账户区右侧）
+      var w = Math.max(140, Math.min(480, startW + (startX - ev.clientX)))
+      settings.cardWidth = w
+      applyCardWidth()
+    })
+    window.addEventListener('mouseup', function (ev) {
+      if (!dragging) return
+      dragging = false
+      saveSettings()
+      if (root.style.display !== 'none') positionPanel()
+    })
   }
 
   /**
@@ -201,6 +248,7 @@
     })
     btn.addEventListener('click', function (e) {
       e.stopPropagation()
+      // 常驻模式下 💰 仍可临时收起/再开（不改 alwaysShow 设置）
       if (window.__dshCostPanel) window.__dshCostPanel.toggle()
     })
     ;(document.body || document.documentElement).appendChild(btn)
@@ -571,10 +619,10 @@
     r3.appendChild(refWrap)
     setEl.appendChild(r3)
 
-    // 卡片宽度
+    // 卡片宽度（预设档位；精细调整用面板右下角拖拽手柄）
     var r4 = rowOf('卡片宽度')
     var wWrap = el('div')
-    ;[230, 280, 330].forEach(function (w) {
+    ;[140, 230, 280, 330].forEach(function (w) {
       var b = el('span', 'dshcw-btn' + (settings.cardWidth === w ? ' on' : ''), w + 'px')
       b.style.marginLeft = '4px'
       b.addEventListener('click', function () {
@@ -587,6 +635,29 @@
     })
     r4.appendChild(wWrap)
     setEl.appendChild(r4)
+    var r4h = el('div', 'dshcw-setrow')
+    r4h.appendChild(el('span', 'hint', '更细：拖面板右下角手柄，松手保存'))
+    setEl.appendChild(r4h)
+
+    // 常驻显示：面板不随 💰 收起，一直挂在账户区旁（配合窄宽度减少遮挡）
+    var r5 = rowOf('常驻显示')
+    r5.appendChild(toggleBtn(
+      function () { return settings.alwaysShow },
+      function (v) {
+        settings.alwaysShow = v
+        if (v) {
+          root.style.display = 'block'
+          positionPanel()
+          tick()
+        } else {
+          hidePanel()
+        }
+      },
+      '开', '关'))
+    setEl.appendChild(r5)
+    var r5h = el('div', 'dshcw-setrow')
+    r5h.appendChild(el('span', 'hint', '开着时面板一直在，💰 仍可临时收起'))
+    setEl.appendChild(r5h)
 
     // 底部：重置面板（重新锚定账户区 + 刷新数据）
     var foot = el('div', 'dshcw-setfoot')
