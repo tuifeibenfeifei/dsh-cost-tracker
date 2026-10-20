@@ -339,7 +339,7 @@
     l.appendChild(el('span', null, label))
     var v = el('div', 'dshcw-val' + (valClass ? ' ' + valClass : ''), value)
     if (narrow) {
-      // 窄面板：上下两行布局，标签在上、数值在下，文字可换行不断字
+      // 窄面板：上下两行布局——标签在上、数值在下（先标题后内容，与宽面板一致）
       r.style.flexDirection = 'column'
       r.style.alignItems = 'flex-start'
       r.style.gap = '1px'
@@ -347,8 +347,8 @@
       v.style.width = '100%'
       v.style.whiteSpace = 'normal'
       v.style.wordBreak = 'break-word'
-      r.appendChild(v)
       r.appendChild(l)
+      r.appendChild(v)
     } else {
       r.appendChild(l)
       r.appendChild(v)
