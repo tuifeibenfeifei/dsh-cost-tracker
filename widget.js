@@ -19,14 +19,39 @@
 
   var CSS_ID = 'dsh-cost-widget-css'
   var STORE_KEY = 'dsh-cost-widget-pos'
+  var SETTINGS_KEY = 'dsh-cost-widget-settings'
   var REFRESH_MS = 60000
+
+  // ---------- 用户设置（localStorage 持久化）----------
+  var settings = {
+    bubble: true,      // 轮次气泡
+    sound: false,      // 提示音
+    refreshSec: 60,    // 刷新间隔
+    cardWidth: 230,    // 卡片宽度
+  }
+  function loadSettings() {
+    try {
+      var raw = localStorage.getItem(SETTINGS_KEY)
+      if (raw) {
+        var s = JSON.parse(raw)
+        if (typeof s.bubble === 'boolean') settings.bubble = s.bubble
+        if (typeof s.sound === 'boolean') settings.sound = s.sound
+        if ([30, 60, 120, 300].indexOf(Number(s.refreshSec)) !== -1) settings.refreshSec = Number(s.refreshSec)
+        if ([230, 280, 330].indexOf(Number(s.cardWidth)) !== -1) settings.cardWidth = Number(s.cardWidth)
+      }
+    } catch (e) {}
+  }
+  function saveSettings() {
+    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)) } catch (e) {}
+  }
+  loadSettings()
 
   // ---------- 样式 ----------
   function injectCss() {
     if (document.getElementById(CSS_ID)) return
     var css = [
       '.dshcw-root{position:fixed;z-index:12000;font-family:var(--dsw-font-family,system-ui,-apple-system,"Segoe UI",sans-serif);font-size:13px;user-select:none}',
-      '.dshcw-card{background:#1f2937;color:#fff;border:1px solid rgba(255,255,255,.16);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.32);overflow:hidden;width:230px}',
+      '.dshcw-card{background:#1f2937;color:#fff;border:1px solid rgba(255,255,255,.16);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.32);overflow:hidden}',
       '.dshcw-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 10px;cursor:pointer;font-weight:700;font-size:12px;letter-spacing:.3px}',
       '.dshcw-title{display:flex;align-items:center;gap:5px;flex:none}',
       '.dshcw-toggle{opacity:.6;font-size:11px;padding:0 2px;flex:none}',
@@ -44,6 +69,17 @@
       '.dshcw-suggest{margin-top:2px;padding:5px 7px;border-radius:6px;background:rgba(251,191,36,.14);border:1px solid rgba(251,191,36,.34);color:#fde68a;font-size:11px;line-height:15px}',
       '.dshcw-ok{margin-top:2px;padding:5px 7px;border-radius:6px;background:rgba(74,222,128,.12);border:1px solid rgba(74,222,128,.28);color:#bbf7d0;font-size:11px;line-height:15px}',
       '.dshcw-empty{padding:8px 10px;font-size:11px;color:#9ca3af}',
+      // —— 设置面板 ——
+      '.dshcw-settings{position:fixed;z-index:13002;width:250px;background:#111827;color:#fff;border:1px solid rgba(255,255,255,.18);border-radius:10px;box-shadow:0 14px 40px rgba(0,0,0,.5);font-size:12px;padding:8px}',
+      '.dshcw-settings-head{display:flex;align-items:center;justify-content:space-between;padding:2px 4px 8px;font-weight:700;color:#9ca3af}',
+      '.dshcw-setrow{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 4px}',
+      '.dshcw-setrow label{color:#e5e7eb;flex:none}',
+      '.dshcw-setrow .hint{color:#6b7280;font-size:10px}',
+      '.dshcw-btn{cursor:pointer;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.06);color:#e5e7eb;border-radius:6px;padding:3px 10px;font-size:11px}',
+      '.dshcw-btn:hover{background:rgba(255,255,255,.12)}',
+      '.dshcw-btn.on{background:rgba(74,222,128,.25);border-color:rgba(74,222,128,.5);color:#bbf7d0}',
+      '.dshcw-btn.danger{color:#fca5a5;border-color:rgba(248,113,113,.4)}',
+      '.dshcw-setfoot{display:flex;justify-content:flex-end;gap:6px;padding-top:8px;border-top:1px solid rgba(255,255,255,.1);margin-top:6px}',
       '.dshcw-hidden .dshcw-body{display:none}',
       '.dshcw-hidden .dshcw-head{border-bottom:none}',
       '.dshcw-drag{cursor:move}'
@@ -107,8 +143,15 @@
     title.appendChild(el('span', null, '💰'))
     title.appendChild(el('span', null, '费用'))
     head.appendChild(title)
-    // 轮次提示音开关（默认静音）
-    addSoundToggle(head)
+    // ⚙ 设置面板（气泡/音效/刷新间隔/卡片宽度/重置位置）
+    var gear = el('span', null, '⚙')
+    gear.title = '设置'
+    gear.style.cssText = 'cursor:pointer;font-size:11px;opacity:.7;margin-left:3px;user-select:none'
+    gear.addEventListener('click', function (e) {
+      e.stopPropagation()
+      toggleSettings(gear)
+    })
+    head.appendChild(gear)
     var toggle = el('span', 'dshcw-toggle', '▾')
     head.appendChild(toggle)
 
@@ -132,22 +175,22 @@
     if (!pos) {
       var vw = window.innerWidth || 1200
       var vh = window.innerHeight || 800
-      pos = { left: vw - 210, top: vh - 250 }
+      pos = { left: vw - settings.cardWidth - 20, top: vh - 250 }
     }
     applyPos(pos)
     enableDrag(head, card)
+    // 应用用户设置
+    applyCardWidth()
     return body
   }
 
   function applyPos(p) {
     if (!root || !p) return
-    // 四边都按卡片**实际尺寸**钳制：水平用固定宽度（与 CSS .dshcw-card 一致），
-    // 垂直用卡片当前 offsetHeight（展开/折叠高度不同，不能写死）。
-    // 否则往下拖卡片会沉出 DSH 界面，内容看不见也拖不回来。
-    var CARD_W = 230
+    // 四边都按卡片**实际尺寸**钳制：水平用设置里的宽度（可变），垂直用实际高度。
     var card = root.firstElementChild
+    var w = (card && card.offsetWidth) || settings.cardWidth || 230
     var h = (card && card.offsetHeight) || 160
-    var maxL = (window.innerWidth || 1200) - CARD_W - 4
+    var maxL = (window.innerWidth || 1200) - w - 4
     var maxT = (window.innerHeight || 800) - h - 4
     root.style.left = Math.max(0, Math.min(p.left, maxL)) + 'px'
     root.style.top = Math.max(0, Math.min(p.top, maxT)) + 'px'
@@ -312,16 +355,7 @@
   }
 
   // ---------- 轮次气泡 + 音效 ----------
-  var SOUND_KEY = 'dsh-cost-widget-sound'
-  var LASTTURN_KEY = 'dsh-cost-widget-lastturn'
   var lastTurnSeen = null
-
-  function soundEnabled() {
-    try { return localStorage.getItem(SOUND_KEY) === '1' } catch (e) { return false }
-  }
-  function setSoundEnabled(on) {
-    try { localStorage.setItem(SOUND_KEY, on ? '1' : '0') } catch (e) {}
-  }
 
   /** 短促「叮」：Web Audio 合成，无外部音频文件（不用鲸鱼素材，规避许可问题） */
   function playChime() {
@@ -386,6 +420,7 @@
       lastTurnSeen = key
       // 只弹 2 分钟内的轮次
       if (Date.now() - Number(lt.at) > 120000) return
+      if (!settings.bubble) return // 设置里关了气泡
       // 组文案：积分 / 真钱 / 免费轮不弹
       var parts = []
       if (Number(lt.costTokenBased) > 0) parts.push('¥' + fmtNum(lt.costTokenBased))
@@ -394,23 +429,130 @@
       }
       if (!parts.length) return
       showTurnBubble('本轮 ' + parts.join(' + '))
-      if (soundEnabled()) playChime()
+      if (settings.sound) playChime()
     } catch (e) {}
   }
 
-  /** 音效开关：挂在挂件标题的小图标，右键切换 */
-  function addSoundToggle(head) {
-    var snd = el('span', null, soundEnabled() ? '🔔' : '🔕')
-    snd.title = '轮次提示音（点击切换）'
-    snd.style.cssText = 'cursor:pointer;font-size:10px;opacity:.7;margin-left:3px;user-select:none'
-    snd.addEventListener('click', function (e) {
-      e.stopPropagation()
-      var on = !soundEnabled()
-      setSoundEnabled(on)
-      snd.textContent = on ? '🔔' : '🔕'
-      if (on) playChime() // 开启时试听
+  // ---------- 设置面板 ----------
+  var setEl = null
+  var refreshTimer = null
+
+  function applyCardWidth() {
+    try {
+      var card = root && root.firstElementChild
+      if (card) card.style.width = settings.cardWidth + 'px'
+      // 位置钳制用得上新宽度
+      if (root) {
+        var r = root.getBoundingClientRect()
+        applyPos({ left: r.left, top: r.top })
+      }
+    } catch (e) {}
+  }
+
+  function applyRefreshInterval() {
+    try {
+      if (refreshTimer) clearInterval(refreshTimer)
+      refreshTimer = setInterval(tick, settings.refreshSec * 1000)
+    } catch (e) {}
+  }
+
+  function toggleSettings(anchor) {
+    if (setEl) { setEl.remove(); setEl = null; return }
+    setEl = el('div', 'dshcw-settings')
+    var head = el('div', 'dshcw-settings-head', '设置')
+    var closeBtn = el('span', 'dshcw-mtree-close', '✕')
+    closeBtn.addEventListener('click', function () { if (setEl) { setEl.remove(); setEl = null } })
+    head.appendChild(closeBtn)
+    setEl.appendChild(head)
+
+    function rowOf(label) {
+      var r = el('div', 'dshcw-setrow')
+      r.appendChild(el('label', null, label))
+      return r
+    }
+    function toggleBtn(get, set, onText, offText) {
+      var b = el('span', 'dshcw-btn' + (get() ? ' on' : ''), get() ? onText : offText)
+      b.addEventListener('click', function () {
+        set(!get())
+        b.classList.toggle('on', get())
+        b.textContent = get() ? onText : offText
+        saveSettings()
+      })
+      return b
+    }
+
+    // 气泡开关
+    var r1 = rowOf('轮次气泡')
+    r1.appendChild(toggleBtn(
+      function () { return settings.bubble },
+      function (v) { settings.bubble = v },
+      '开', '关'))
+    setEl.appendChild(r1)
+
+    // 提示音开关
+    var r2 = rowOf('提示音')
+    r2.appendChild(toggleBtn(
+      function () { return settings.sound },
+      function (v) { settings.sound = v; if (v) playChime() },
+      '🔔 开', '🔕 关'))
+    setEl.appendChild(r2)
+
+    // 刷新间隔
+    var r3 = rowOf('刷新间隔')
+    var refWrap = el('div')
+    ;[30, 60, 120, 300].forEach(function (sec) {
+      var b = el('span', 'dshcw-btn' + (settings.refreshSec === sec ? ' on' : ''), sec + 's')
+      b.style.marginLeft = '4px'
+      b.addEventListener('click', function () {
+        settings.refreshSec = sec
+        saveSettings()
+        applyRefreshInterval()
+        // 更新选中态
+        ;[].forEach.call(refWrap.children, function (c) { c.classList.toggle('on', c === b) })
+      })
+      refWrap.appendChild(b)
     })
-    head.appendChild(snd)
+    r3.appendChild(refWrap)
+    setEl.appendChild(r3)
+
+    // 卡片宽度
+    var r4 = rowOf('卡片宽度')
+    var wWrap = el('div')
+    ;[230, 280, 330].forEach(function (w) {
+      var b = el('span', 'dshcw-btn' + (settings.cardWidth === w ? ' on' : ''), w + 'px')
+      b.style.marginLeft = '4px'
+      b.addEventListener('click', function () {
+        settings.cardWidth = w
+        saveSettings()
+        applyCardWidth()
+        ;[].forEach.call(wWrap.children, function (c) { c.classList.toggle('on', c === b) })
+      })
+      wWrap.appendChild(b)
+    })
+    r4.appendChild(wWrap)
+    setEl.appendChild(r4)
+
+    // 底部：重置位置
+    var foot = el('div', 'dshcw-setfoot')
+    var resetBtn = el('span', 'dshcw-btn danger', '重置位置')
+    resetBtn.title = '拖丢了的回滚手段：回到右下角默认位'
+    resetBtn.addEventListener('click', function () {
+      try { localStorage.removeItem(STORE_KEY) } catch (e) {}
+      var vw = window.innerWidth || 1200
+      var vh = window.innerHeight || 800
+      applyPos({ left: vw - settings.cardWidth - 20, top: vh - 300 })
+    })
+    foot.appendChild(resetBtn)
+    setEl.appendChild(foot)
+
+    ;(document.body || document.documentElement).appendChild(setEl)
+    // 定位：锚点（⚙）附近，视口钳制
+    var r = anchor.getBoundingClientRect()
+    var w = 250
+    var left = Math.max(4, Math.min(r.right - w, (window.innerWidth || 1200) - w - 4))
+    var top = Math.min(r.bottom + 6, (window.innerHeight || 800) - 300)
+    setEl.style.left = left + 'px'
+    setEl.style.top = top + 'px'
   }
 
   function tick() {
@@ -433,7 +575,7 @@
     try {
       build()
       tick()
-      setInterval(tick, REFRESH_MS)
+      applyRefreshInterval() // 用设置里的间隔（30/60/120/300s）
     } catch (e) {}
   }
 
