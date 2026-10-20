@@ -141,6 +141,9 @@ Kimi-K3-1           [少 用]
 
 **额度限制**：`hy3`（每日赠额，用尽后转付费）
 
+**限流标记**：被限流/额度用尽的模型直接显示红底「限 流」标签，
+不用悬停也能一眼看出不能用；悬停显示精确恢复时间 + 每秒跳动的倒计时。
+
 #### 悬停说明
 
 鼠标悬停模型项，在**模型列表右侧外层**显示两行：
@@ -241,20 +244,79 @@ curl -X POST http://127.0.0.1:<port>/cost-tracker/aliyun/calibrate \
 > 但**绝不能把 `deepseekAccount` 写进 `inject` 数组**——老宿主没这个服务时，
 > 整个插件会永远等不到服务而完全不 apply。
 
+### 7. 费用挂件（widget.js，自动注入页面）
+
+固定 230px 宽的深色小卡片，通过 `webserver/index-inject` 的**内联 script 行**
+注入到 DSH 页面（不能用 script-src：加载失败会 reject `__DSH_BOOT_READY__`
+让整个应用起不来——dsh-whale-widget issue #154 的教训）。
+
+```
+┌────────────────────────────┐
+│ 💰 费用                  ▾ │
+├────────────────────────────┤
+│ ● DeepSeek    ¥40.37       │  真钱
+│ ● 阿里云券    ¥217.96      │  抵用券
+│ ● WorkBuddy   4101 积分    │
+│ ────────────────────────── │
+│ 单轮 #96       免费        │
+│ 今天 8 轮   ¥0.10 / 3 积分 │
+│ 本月 60 轮  ¥3.07 / 43 积分│
+│ ────────────────────────── │
+│ 💡 当前 xxx 消耗积分，      │
+│    yyy 现在免费，切过去更省 │
+│ ────────────────────────── │
+│ 非高峰时段                  │
+│ 1. GLM-5.3-Flash           │
+│ 2. Space-Bunny             │
+└────────────────────────────┘
+```
+
+- **记账双档**：单轮费用 + 当天/当月（北京时区自然日/月），阿里云不参与
+- **主动建议**：红（当前模型不可用）/ 黄（有更省的）/ 绿（已最优）
+- 可折叠、可拖动、位置记 localStorage；四边按卡片实际尺寸钳制，不会拖出界面
+- 数据 60 秒自动刷新
+
+### 8. 分时段省钱推荐（lib/recommend.js）
+
+回答两个问题：**现在用哪个最省？首选不能用了换谁？**
+
+- 按当前时段计算每个模型的**实际倍率**（含夜间免费/夜间折扣/官方峰谷 5 折）
+- 排序：可用免费 > 实际倍率 > 思考成本（同倍率下默认思考低的优先）> 常用度
+- **实时排除**：限流中的模型直接淘汰；免费额度用尽的按付费替代倍率（x0.05）参与排序
+- 上下文过滤：长文场景（≥90 万）自动淘汰装不下的模型
+- 峰谷判定复用 pricing.js（含周末 + 法定节假日全天谷价），本模块不自己实现
+- 时段标签四类：工作日高峰 / 工作日非高峰 / 周末 / 法定节假日
+
+**限额状态必须持久化**（`state.limits`）：内存标记一重启就丢，
+用户标记的「额度用尽」会失效——实测教训。变更即写盘，启动即恢复。
+
+**手动标记接口**（上游 status 不返回限额数据时的兜底）：
+
+```bash
+curl -X POST http://127.0.0.1:<port>/cost-tracker/model-state \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"hy3","state":"exhausted","hours":12}'
+```
+
 ## HTTP 路由
 
 | 路由 | 方法 | 用途 |
 |---|---|---|
 | `/cost-tracker/summary` | GET | 汇总（各平台花费、三个余额、健康、最近 20 轮） |
+| `/cost-tracker/ledger` | GET | 记账：单轮费用 + 当天/当月双档（仿小鲸鱼；阿里云不参与） |
+| `/cost-tracker/session` | GET | 本次会话花费（按 session 聚合） |
 | `/cost-tracker/turn` | GET | 最近一轮 |
 | `/cost-tracker/turns` | GET | 每轮消耗明细（`?limit=50&platform=workbuddy`） |
 | `/cost-tracker/health` | GET | WorkBuddy 账号健康（顺带采样） |
 | `/cost-tracker/aliyun` | GET | 阿里云抵用券余额视图 |
 | `/cost-tracker/aliyun/calibrate` | POST | 用官方 CSV 校准抵用券余额 |
 | `/cost-tracker/deepseek-balance` | GET | 官方余额；`?force=1` 跳过 60 秒缓存 |
+| `/cost-tracker/recommend` | GET | 分时段省钱推荐（实时排除限流/额度用尽的模型） |
 | `/cost-tracker/model-limits` | GET | 模型倍率、上下文、思考强度、限流状态 |
 | `/cost-tracker/models` | GET | WorkBuddy 模型排序 + 徽章表 |
+| `/cost-tracker/model-state` | POST | 手动标记额度用尽/清除（上游不提供限额数据时的兜底） |
 | `/cost-tracker/reset` | GET | 清空统计（保留阿里云校准基准） |
+| `/cost-tracker/widget.js` | GET | 页面挂件脚本（由插件自动注入，无需手动访问） |
 
 端口每次启动可能变，用 `ctx.webServer.getOrigin()` 取，或看 Web GUI 地址栏。
 
@@ -334,7 +396,9 @@ dsh-cost-tracker/
 
 ## 版本
 
-- **0.3.0** — 模型内联标签 + 悬停说明；修复 DeepSeek 余额读取
+- **0.4.0** — 费用挂件（自动注入）；分时段省钱推荐（实时排除不可用模型）；
+  记账双档（单轮/当天/当月）；限流标签与悬停恢复倒计时；限额状态持久化
+- 0.3.0 — 模型内联标签 + 悬停说明；修复 DeepSeek 余额读取
 - 0.2.1 — 移除阿里云 token 计价；新增 `/turns` 明细路由
 - 0.2.0 — 三平台记账 + CSV 校准 + 四档排序
 
