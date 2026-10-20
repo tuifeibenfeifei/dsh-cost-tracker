@@ -110,7 +110,6 @@
 
   // ---------- 建 DOM ----------
   var root = null
-  var collapsed = false
   var lastReco = null
 
   function el(tag, cls, text) {
@@ -130,7 +129,7 @@
     title.appendChild(el('span', null, '💰'))
     title.appendChild(el('span', null, '费用'))
     head.appendChild(title)
-    // ⚙ 设置面板（气泡/音效/刷新间隔/卡片宽度/重置位置）
+    // ⚙ 设置面板（气泡/音效/刷新间隔/卡片宽度）
     var gear = el('span', null, '⚙')
     gear.title = '设置'
     gear.style.cssText = 'cursor:pointer;font-size:11px;opacity:.7;margin-left:3px;user-select:none'
@@ -139,39 +138,98 @@
       toggleSettings(gear)
     })
     head.appendChild(gear)
-    var toggle = el('span', 'dshcw-toggle', '▾')
-    head.appendChild(toggle)
+    var closeBtn = el('span', 'dshcw-toggle', '✕')
+    closeBtn.title = '收起'
+    head.appendChild(closeBtn)
+    closeBtn.addEventListener('click', function (e) {
+      e.stopPropagation()
+      hidePanel()
+    })
 
     var body = el('div', 'dshcw-body')
     body.appendChild(el('div', 'dshcw-empty', '加载中…'))
-
-    head.addEventListener('click', function (e) {
-      if (e.target === toggle) return
-      collapsed = !collapsed
-      card.classList.toggle('dshcw-hidden', collapsed)
-      toggle.textContent = collapsed ? '▸' : '▾'
-    })
 
     card.appendChild(head)
     card.appendChild(body)
     root.appendChild(card)
     ;(document.body || document.documentElement).appendChild(root)
 
-    // 面板默认收起：点侧栏 💰 按钮才打开
+    // 面板默认隐藏；显隐只由侧栏账户行的 💰 按钮控制（不再自建悬浮卡）
     root.style.display = 'none'
-    // 应用用户设置
     applyCardWidth()
-    // 侧栏 💰 点击 → 开/关面板
-    window.addEventListener('dsh-cost-tracker:toggle', function () {
-      var show = root.style.display === 'none'
-      root.style.display = show ? 'block' : 'none'
-      if (show) positionPanel()
-    })
+    // 暴露面板控制 API
+    window.__dshCostPanel = {
+      toggle: function () {
+        var show = root.style.display === 'none'
+        root.style.display = show ? 'block' : 'none'
+        if (show) { positionPanel(); tick() }
+      },
+      close: hidePanel,
+    }
     // 窗口变化时重新定位
     window.addEventListener('resize', function () {
       if (root.style.display !== 'none') positionPanel()
     })
+    injectSidebarButton()
     return body
+  }
+
+  /**
+   * 在侧栏账户行里加 💰 按钮（与头像**同一行**）。
+   *
+   * 为什么不用 slot：sidebar.footer.action 会被 shell 渲染成独立一行，
+   * 无法与账户按钮同排。所以用页面脚本直接找账户按钮所在的行容器，
+   * 把 💰 追加进去。shell 重渲染侧栏时按钮可能被清掉，用定时器保活。
+   */
+  function injectSidebarButton() {
+    var btn = null
+    function tryInject() {
+      if (btn && document.contains(btn)) return true
+      var acc = findAccountButton()
+      if (!acc) return false
+      btn = document.createElement('button')
+      btn.textContent = '💰'
+      btn.title = '费用面板'
+      btn.style.cssText = 'background:none;border:none;cursor:pointer;font-size:14px;' +
+        'line-height:20px;padding:2px 6px;border-radius:6px;color:inherit;opacity:.85;flex:none'
+      btn.addEventListener('click', function (e) {
+        e.stopPropagation()
+        if (window.__dshCostPanel) window.__dshCostPanel.toggle()
+      })
+      // 插到账户按钮同一行的容器末尾（行容器 = 账户按钮的父节点）
+      var row = acc.parentElement
+      if (!row) return false
+      row.style.display = row.style.display || 'flex'
+      row.style.alignItems = 'center'
+      row.appendChild(btn)
+      return true
+    }
+    // 账户行可能晚于本脚本出现：轮询注入 + 定期保活
+    var tries = 0
+    var iv = setInterval(function () {
+      if (tryInject() || ++tries > 60) clearInterval(iv)
+    }, 1000)
+    setInterval(function () { tryInject() }, 5000)
+  }
+
+  /** 找账户按钮元素（区别于 findAccountArea 的坐标版） */
+  function findAccountButton() {
+    try {
+      var candidates = document.querySelectorAll('button')
+      for (var i = 0; i < candidates.length; i++) {
+        var b = candidates[i]
+        var r = b.getBoundingClientRect()
+        if (r.width === 0 || r.height === 0) continue
+        if (r.left >= 0 && r.left < 60 && r.top > (window.innerHeight || 800) * 0.5 && r.height > 20 && r.height < 120) {
+          return b
+        }
+      }
+    } catch (e) {}
+    return null
+  }
+
+  function hidePanel() {
+    if (root) root.style.display = 'none'
   }
 
   /** 找侧栏账户区（底部）的屏幕位置：返回 {left, top, width, height} 或 null */
