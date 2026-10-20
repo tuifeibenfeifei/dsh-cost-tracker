@@ -37,10 +37,14 @@ window.__ModuleLoader__.load({
     const React = require('react')
     const { createElement: h, useState, useEffect, useRef, useCallback } = React
 
-    /** 第二档：主力 */
-    const TIER_MAIN = ['deepseek-v4.1-flash']
-    /** 第三档：常用 */
-    const TIER_COMMON = ['glm-5.3-flash', 'space-bunny', 'minimax-m2.7', 'hy4-preview']
+    /**
+     * 档位/清单默认值（兜底）。全部可被宿主 /models 路由下发的
+     * tiers / quotaModels / peakModels 配置覆盖——每个人的模型清单不同，
+     * 硬编码只是开箱示例。促销时间窗**不做硬编码**：上游 badge 本身就是
+     * 实时状态（「夜间免费」「限时免费」），悬停直接展示 badge 文字。
+     */
+    let TIER_MAIN = ['deepseek-v4.1-flash']
+    let TIER_COMMON = ['glm-5.3-flash', 'space-bunny', 'minimax-m2.7', 'hy4-preview']
 
     /** 档位配色：高饱和实心块 */
     const TIER_VIEW = {
@@ -50,25 +54,28 @@ window.__ModuleLoader__.load({
       rare:   { text: '少用', bg: '#4b5563' },
     }
 
-    /**
-     * 促销说明文案（用户实测的 WorkBuddy 客户端原文）。
-     * 上游 status 接口只给 badge 标签，不给时间窗文字，
-     * 所以这里按模型 id 维护，仅用于悬停展示。
-     */
-    const PROMO_DESC = {
-      'hy4-preview': '9月11日–10月31日，每晚 23:00—次日 8:00 享免费额度。',
-      'hy3': '7月6日–10月31日，每日赠送免费额度。',
-      'step-5-preview': '10月12日-10月25日，独家官方合作享限时免费体验。',
-      'deepseek-v4.1-flash': '周一至周五 09:00–12:00、14:00–18:00 属高峰原价；中午、晚间与周末节假日为谷时 5 折。',
-      'deepseek-v4-pro': '周一至周五 09:00–12:00、14:00–18:00 属高峰原价；中午、晚间与周末节假日为谷时 5 折。',
-      'glm-5.2': '每晚 23:00—次日 8:00 积分限时立减，错峰用更省。',
+    /** 峰谷规则模型（上游不给 badge，按官方峰谷本地推算；可被配置覆盖） */
+    let NIGHT_DISCOUNT = ['deepseek-v4.1-flash', 'deepseek-v4-pro']
+
+    /** 每日赠额类模型：显示「额度限制」标签（可被配置覆盖） */
+    let QUOTA_MODEL = ['hy3']
+
+    /** 应用宿主下发的配置（/models 路由的 tiers / quotaModels / peakModels） */
+    let PROMO_DESC = {}
+    function applyModelConfig(cfg) {
+      const c = cfg || {}
+      if (Array.isArray(c.tiers)) {
+        if (Array.isArray(c.tiers.main)) TIER_MAIN = c.tiers.main.map(String)
+        if (Array.isArray(c.tiers.common)) TIER_COMMON = c.tiers.common.map(String)
+      }
+      if (Array.isArray(c.quotaModels) && c.quotaModels.length) QUOTA_MODEL = c.quotaModels.map(String)
+      if (Array.isArray(c.peakModels) && c.peakModels.length) NIGHT_DISCOUNT = c.peakModels.map(String)
+      // 促销说明：可选配置（promoDesc: { 模型id: 文案 }）；不配则悬停显示 badge 原文
+      if (c.promoDesc && typeof c.promoDesc === 'object') {
+        PROMO_DESC = {}
+        for (const k of Object.keys(c.promoDesc)) PROMO_DESC[String(k)] = String(c.promoDesc[k])
+      }
     }
-
-    /** 有夜间折扣规则的模型（上游不给 badge，按官方峰谷规则本地推算） */
-    const NIGHT_DISCOUNT = ['deepseek-v4.1-flash', 'deepseek-v4-pro']
-
-    /** 每日赠额类模型：显示「额度限制」标签 */
-    const QUOTA_MODEL = ['hy3']
 
     let badgeCache = null
     let badgeFetchedAt = 0
@@ -120,6 +127,8 @@ window.__ModuleLoader__.load({
       if (badgeCache !== null && Date.now() - badgeFetchedAt < REFRESH_MS) return Promise.resolve(badgeCache)
       badgeInFlight = fetchJson('/cost-tracker/models')
         .then(json => {
+          // 宿主下发的可配置清单：档位/额度/峰谷/促销说明
+          applyModelConfig(json)
           const ranked = json && Array.isArray(json.ranked) ? json.ranked : []
           const map = {}
           for (const m of ranked) {
@@ -186,7 +195,7 @@ window.__ModuleLoader__.load({
       const view = TIER_VIEW[tier]
       tags.push({ text: view.text, bg: view.bg, title: '使用频度分档' })
 
-      // 促销：上游 badges 实时值
+      // 促销：上游 badges 实时值（badge 文字本身即实时状态，不做时间窗硬编码）
       const badges = Array.isArray(meta.badges) ? meta.badges : []
       for (const b of badges) {
         if (!b) continue
@@ -196,10 +205,10 @@ window.__ModuleLoader__.load({
         const bg = text.indexOf('免费') !== -1 ? '#0e7490'
           : text.indexOf('折扣') !== -1 ? '#7c3aed'
           : '#6d28d9'
-        tags.push({ text, bg, title: PROMO_DESC[modelId] || text })
+        tags.push({ text, bg, title: text })
       }
 
-      // 峰谷折扣：deepseek 系按官方峰谷规则推算。
+      // 峰谷折扣：按官方峰谷规则推算（模型清单可配置）。
       // 注意**不能叫「夜间折扣」**——非高峰包含中午 12-14、18-次日 9 点、
       // 以及周末与法定节假日全天，夜间只是其中一段。
       if (NIGHT_DISCOUNT.indexOf(modelId) !== -1 && !badges.some(b => String(b).indexOf('折扣') !== -1)) {
@@ -207,7 +216,7 @@ window.__ModuleLoader__.load({
         tags.push({
           text: offPeak ? '谷时5折' : '高峰原价',
           bg: offPeak ? '#7c3aed' : '#9ca3af',
-          title: PROMO_DESC[modelId] || '',
+          title: '周一至周五 09:00–12:00、14:00–18:00 属高峰原价；中午、晚间与周末节假日为谷时 5 折',
         })
       }
 
@@ -268,7 +277,6 @@ window.__ModuleLoader__.load({
       } else if (meta.badges && meta.badges.length) {
         lines.push(String(meta.badges.join(' · ')))
       }
-
       // ===== 可用状态 =====
       const lim = (limitCache && limitCache[modelId]) || {}
       const now = Date.now()

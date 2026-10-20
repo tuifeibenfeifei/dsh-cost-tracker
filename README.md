@@ -227,9 +227,9 @@ curl -X POST http://127.0.0.1:<port>/cost-tracker/aliyun/calibrate \
 
 ```json
 {
-  "available": 45.05,
-  "recharged": 22.49,
-  "bonus": 22.56,
+  "available": 40.00,
+  "recharged": 20.00,
+  "bonus": 20.00,
   "currency": "CNY",
   "error": null
 }
@@ -255,8 +255,8 @@ curl -X POST http://127.0.0.1:<port>/cost-tracker/aliyun/calibrate \
 │ 💰 费用                  ▾ │
 ├────────────────────────────┤
 │ ● DeepSeek    ¥40.37       │  真钱
-│ ● 阿里云券    ¥217.96      │  抵用券
-│ ● WorkBuddy   4101 积分    │
+│ ● 阿里云券    ¥XXX.XX      │  抵用券
+│ ● WorkBuddy   XXXX 积分    │
 │ ────────────────────────── │
 │ 单轮 #96       免费        │
 │ 今天 8 轮   ¥0.10 / 3 积分 │
@@ -298,6 +298,33 @@ curl -X POST http://127.0.0.1:<port>/cost-tracker/model-state \
   -d '{"model":"hy3","state":"exhausted","hours":12}'
 ```
 
+## 配置（通用化）
+
+插件开箱即用（内置一份默认模型清单），但**每个人的模型、倍率、常用度都不同**。
+在你的 `cordis.patch.yml` 的 cost-tracker 行下加 `config:` 覆盖：
+
+```yaml
+- insert:
+    - id: cost-tracker
+      name: dsh-cost-tracker
+      config:
+        # 遵循「工作日 9-12/14-18 高峰原价、其余谷价」的模型
+        peakModels: [deepseek-v4.1-flash, deepseek-v4-pro]
+        # 每日赠额型模型（额度用尽转 429/付费）
+        quotaModels: [hy3]
+        # 推荐排序的同分优先项
+        preferred: [deepseek-v4.1-flash, glm-5.3-flash]
+        # 标签档位
+        tiers:
+          main: [deepseek-v4.1-flash]
+          common: [glm-5.3-flash, space-bunny]
+        # 促销时间窗说明（可选；不配则悬停显示上游 badge 原文）
+        promoDesc:
+          hy4-preview: 每晚 23:00—次日 8:00 享免费额度（以官方公告为准）。
+```
+
+不配置也能跑：内置清单作为开箱示例；但推荐排序与档位标签
+只对示例清单准确，**按自己的实际情况覆盖才有意义**。
 ## HTTP 路由
 
 | 路由 | 方法 | 用途 |
