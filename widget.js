@@ -107,6 +107,8 @@
     title.appendChild(el('span', null, '💰'))
     title.appendChild(el('span', null, '费用'))
     head.appendChild(title)
+    // 轮次提示音开关（默认静音）
+    addSoundToggle(head)
     var toggle = el('span', 'dshcw-toggle', '▾')
     head.appendChild(toggle)
 
@@ -309,6 +311,108 @@
     return fetch(url, { cache: 'no-store' }).then(function (r) { return r.json() })
   }
 
+  // ---------- 轮次气泡 + 音效 ----------
+  var SOUND_KEY = 'dsh-cost-widget-sound'
+  var LASTTURN_KEY = 'dsh-cost-widget-lastturn'
+  var lastTurnSeen = null
+
+  function soundEnabled() {
+    try { return localStorage.getItem(SOUND_KEY) === '1' } catch (e) { return false }
+  }
+  function setSoundEnabled(on) {
+    try { localStorage.setItem(SOUND_KEY, on ? '1' : '0') } catch (e) {}
+  }
+
+  /** 短促「叮」：Web Audio 合成，无外部音频文件（不用鲸鱼素材，规避许可问题） */
+  function playChime() {
+    try {
+      var Ctx = window.AudioContext || window.webkitAudioContext
+      if (!Ctx) return
+      if (!playChime._ctx) playChime._ctx = new Ctx()
+      var ctx = playChime._ctx
+      var osc = ctx.createOscillator()
+      var gain = ctx.createGain()
+      osc.type = 'sine'
+      osc.frequency.setValueAtTime(880, ctx.currentTime)          // A5
+      osc.frequency.exponentialRampToValueAtTime(1320, ctx.currentTime + 0.12) // 上滑到 E6
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime)
+      gain.gain.exponentialRampToValueAtTime(0.18, ctx.currentTime + 0.02)
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.35)
+      osc.connect(gain); gain.connect(ctx.destination)
+      osc.start(); osc.stop(ctx.currentTime + 0.4)
+    } catch (e) {}
+  }
+
+  /** 轮次结束气泡：出现在挂件正上方，4.5 秒后淡出 */
+  function showTurnBubble(text) {
+    try {
+      var old = document.getElementById('dshcw-turn-bubble')
+      if (old) old.remove()
+      var b = el('div', null, text)
+      b.id = 'dshcw-turn-bubble'
+      b.style.cssText = 'position:fixed;z-index:12001;background:#1f2937;color:#fff;' +
+        'border:1px solid rgba(255,255,255,.2);border-radius:8px;padding:7px 11px;' +
+        'font-size:12px;font-weight:700;box-shadow:0 8px 24px rgba(0,0,0,.4);' +
+        'white-space:nowrap;opacity:0;transition:opacity .3s;pointer-events:none;' +
+        'font-family:var(--dsw-font-family,system-ui,sans-serif)'
+      ;(document.body || document.documentElement).appendChild(b)
+      // 定位：挂件上方（每次渲染后 root 位置可能被拖动过，现取现用）
+      var rr = root.getBoundingClientRect()
+      var left = Math.max(4, Math.min(rr.left, (window.innerWidth || 1200) - 220))
+      var top = Math.max(4, rr.top - 44)
+      b.style.left = left + 'px'
+      b.style.top = top + 'px'
+      // 淡入
+      requestAnimationFrame(function () { b.style.opacity = '1' })
+      setTimeout(function () {
+        b.style.opacity = '0'
+        setTimeout(function () { b.remove() }, 400)
+      }, 4500)
+    } catch (e) {}
+  }
+
+  /** 检测新轮次：turn 序号变化且时间在最近 2 分钟内 → 弹气泡（免费轮不弹） */
+  function checkNewTurn(ledger) {
+    try {
+      if (!ledger || !ledger.ok || !ledger.lastTurn) return
+      var lt = ledger.lastTurn
+      var key = lt.turn + ':' + lt.at
+      if (lastTurnSeen === null) {
+        // 首次加载：只记录，不弹（避免刷新页面时重弹历史轮）
+        lastTurnSeen = key
+        return
+      }
+      if (key === lastTurnSeen) return
+      lastTurnSeen = key
+      // 只弹 2 分钟内的轮次
+      if (Date.now() - Number(lt.at) > 120000) return
+      // 组文案：积分 / 真钱 / 免费轮不弹
+      var parts = []
+      if (Number(lt.costTokenBased) > 0) parts.push('¥' + fmtNum(lt.costTokenBased))
+      if (lt.workbuddy && typeof lt.workbuddy.spent === 'number' && lt.workbuddy.spent > 0) {
+        parts.push(lt.workbuddy.spent + ' 积分')
+      }
+      if (!parts.length) return
+      showTurnBubble('本轮 ' + parts.join(' + '))
+      if (soundEnabled()) playChime()
+    } catch (e) {}
+  }
+
+  /** 音效开关：挂在挂件标题的小图标，右键切换 */
+  function addSoundToggle(head) {
+    var snd = el('span', null, soundEnabled() ? '🔔' : '🔕')
+    snd.title = '轮次提示音（点击切换）'
+    snd.style.cssText = 'cursor:pointer;font-size:10px;opacity:.7;margin-left:3px;user-select:none'
+    snd.addEventListener('click', function (e) {
+      e.stopPropagation()
+      var on = !soundEnabled()
+      setSoundEnabled(on)
+      snd.textContent = on ? '🔔' : '🔕'
+      if (on) playChime() // 开启时试听
+    })
+    head.appendChild(snd)
+  }
+
   function tick() {
     Promise.all([
       fetchJson('/cost-tracker/summary'),
@@ -317,6 +421,7 @@
     ]).then(function (res) {
       render(res[0], res[1], res[2])
       lastReco = res[1]
+      checkNewTurn(res[2])
     }).catch(function () {
       var body = root && root.querySelector('.dshcw-body')
       if (body) { body.textContent = ''; body.appendChild(el('div', 'dshcw-empty', '取数失败')) }
