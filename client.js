@@ -544,7 +544,7 @@ window.__ModuleLoader__.load({
       }, nodes)
     }
 
-    const inject = ['slots', 'locale']
+    const inject = ['slots', 'locale', 'remote.session']
 
     /**
      * 插件入口。
@@ -565,6 +565,37 @@ window.__ModuleLoader__.load({
 
     function applyInner(ctx) {
       const namespace = 'cost-tracker'
+
+      // ===== 树形选择器的 Remote 桥 =====
+      // remote.session 只存在于 client 半身的注入作用域（对 settings-models 的
+      // 源码核实：inject = ["slots","locale","remote",...,"remote.session"]），
+      // 裸页面脚本（widget.js）拿不到。这里把它桥到 window 全局约定点，
+      // 挂件通过 window.__dshCostWidgetApi 访问 modelCatalog / selectModel。
+      // 注意返回是 { ok, value } 包裹（Remote 快照形态），桥里统一解包。
+      try {
+        const session = ctx.remote && ctx.remote.session
+        if (session) {
+          window.__dshCostWidgetApi = {
+            modelCatalog: async () => {
+              const r = await Promise.resolve(session.modelCatalog())
+              if (r && r.ok === false) throw new Error(r.error && r.error.message || 'catalog failed')
+              // typert 快照：{ ok, value } 或直接对象两种形态都兼容
+              return (r && Object.prototype.hasOwnProperty.call(r, 'value')) ? r.value : r
+            },
+            selectModel: async (payload) => {
+              const r = await Promise.resolve(session.selectModel(payload))
+              if (r && r.ok === false) {
+                const msg = r.error && (r.error.message || r.error.code) || 'select failed'
+                throw new Error(String(msg))
+              }
+              return r
+            },
+          }
+        }
+      } catch (e) {
+        try { console.error('[dsh-cost-tracker] remote bridge failed:', e) } catch { /* 忽略 */ }
+      }
+
 
       ctx.effect(
         () => ctx.locale.register(namespace, {

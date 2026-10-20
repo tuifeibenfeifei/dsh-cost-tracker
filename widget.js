@@ -327,22 +327,15 @@
   }
 
   // ---------- 树形模型选择器 ----------
-  // 数据来自 ctx.remote.session.modelCatalog() / selectModel()——
-  // 这两个是 DSH 内核 api-session-controller 暴露的 Remote 方法，
-  // 页面脚本可通过 window 里已注入的 typert 客户端访问；取不到就走降级路径。
+  // 数据来自 DSH 内核的 Remote API（modelCatalog / selectModel）。
+  // remote.session 只存在于 client 半身的注入作用域（对 settings-models 的
+  // 源码核实），**不挂 window 全局**——裸页面脚本拿不到。
+  // 所以 client.js（正式 client 半身，inject 含 "remote.session"）把它桥到
+  // window.__dshCostWidgetApi；这里只认这个桥，桥不存在就明确报错。
   function findRemoteSession() {
     try {
-      // DSH 前端把 remote 命名空间挂在多个位置，逐个探测
-      var cands = [window.__DSH__, window.dsh, (window.__DSH_BOOT__ || {}).remote]
-      for (var i = 0; i < cands.length; i++) {
-        var c = cands[i]
-        if (c && c.remote && c.remote.session) return c.remote.session
-      }
-      // 常见形态：全局 require 缓存 / ModuleLoader
-      if (window.__ModuleLoader__ && typeof window.__ModuleLoader__.service === 'function') {
-        var svc = window.__ModuleLoader__.service('session')
-        if (svc && svc.remote) return svc.remote
-      }
+      var api = window.__dshCostWidgetApi
+      if (api && typeof api.modelCatalog === 'function' && typeof api.selectModel === 'function') return api
     } catch (e) {}
     return null
   }
