@@ -188,7 +188,7 @@
     return r
   }
 
-  function render(summary, reco, sess) {
+  function render(summary, reco, ledger) {
     var body = root.querySelector('.dshcw-body')
     if (!body) return
     body.textContent = ''
@@ -211,25 +211,35 @@
 
     body.appendChild(el('div', 'dshcw-sep'))
 
-    // 今日花费
-    var t = summary && summary.totals
-    var today = []
-    if (t) {
-      if (Number(t.costTokenBased) > 0) today.push('¥' + fmtNum(t.costTokenBased))
-      if (Number(t.workbuddyCredits) > 0) today.push(t.workbuddyCredits + ' 分')
-    }
-    body.appendChild(row('累计', today.length ? today.join(' / ') : '0', null, today.length ? 'warn' : 'free'))
+    // ===== 记账：单轮 → 当天 → 当月 =====
+    if (ledger && ledger.ok) {
+      // 单轮：最近一次对话花了多少
+      var lt = ledger.lastTurn
+      if (lt) {
+        var one = []
+        if (Number(lt.costTokenBased) > 0) one.push('¥' + fmtNum(lt.costTokenBased))
+        if (lt.workbuddy && typeof lt.workbuddy.spent === 'number' && lt.workbuddy.spent > 0) {
+          one.push(lt.workbuddy.spent + ' 分')
+        }
+        body.appendChild(row('单轮 #' + lt.turn, one.length ? one.join(' / ') : '免费', null, one.length ? 'warn' : 'free'))
+      }
 
-    // 本次会话花费
-    if (sess && sess.ok && sess.turns) {
-      var mine = []
-      if (Number(sess.costTokenBased) > 0) mine.push('¥' + fmtNum(sess.costTokenBased))
-      if (Number(sess.workbuddyCredits) > 0) mine.push(sess.workbuddyCredits + ' 分')
-      // 阿里云只显示 token，不给金额（实测偏差过大）
-      if (Number(sess.aliyunTokens) > 0) mine.push('阿里云 ' + Math.round(sess.aliyunTokens / 1000) + 'K tok')
-      body.appendChild(row('本次会话 ' + sess.turns + ' 轮',
-        mine.length ? mine.join(' / ') : '0',
-        null, mine.length ? 'warn' : 'free'))
+      // 当天 / 当月两档
+      var d = ledger.day || {}
+      var m = ledger.month || {}
+      var dParts = []
+      if (Number(d.costTokenBased) > 0) dParts.push('¥' + fmtNum(d.costTokenBased))
+      if (Number(d.workbuddyCredits) > 0) dParts.push(d.workbuddyCredits + ' 分')
+      body.appendChild(row('今天 ' + (d.turns || 0) + ' 轮',
+        dParts.length ? dParts.join(' / ') : '0', null, dParts.length ? 'warn' : 'free'))
+
+      var mParts = []
+      if (Number(m.costTokenBased) > 0) mParts.push('¥' + fmtNum(m.costTokenBased))
+      if (Number(m.workbuddyCredits) > 0) mParts.push(m.workbuddyCredits + ' 分')
+      body.appendChild(row('本月 ' + (m.turns || 0) + ' 轮',
+        mParts.length ? mParts.join(' / ') : '0', null, mParts.length ? 'warn' : 'free'))
+
+      // 注：阿里云不进记账——token 推算偏差 26.6 倍，无可信金额
     }
 
     // 主动省钱建议（最重要，放最上面显眼位置）
@@ -281,7 +291,7 @@
     Promise.all([
       fetchJson('/cost-tracker/summary'),
       fetchJson('/cost-tracker/recommend'),
-      fetchJson('/cost-tracker/session'),
+      fetchJson('/cost-tracker/ledger'),
     ]).then(function (res) {
       render(res[0], res[1], res[2])
       lastReco = res[1]
