@@ -390,17 +390,16 @@
           one.push(lt.workbuddy.spent + ' 积分')
         }
         // 「免费」只有在使用免费模型时才成立：
-        //  - allFree=true（本轮全部是 workbuddy 免费模型）→ 免费
-        //  - 付费模型但消耗没采到（扣减延迟/采样失败）→ 结算中…/—，绝不能显示免费
-        //  - 付费模型消耗已确认 0（confirmed-zero）→ 免费（罕见但合法）
+        //  - allFree=true（本轮全部是上游标记免费的模型）→ 免费
+        //  - zero-pending/unconfirmed（付费模型扣减未入账）→ 结算中…/—，绝不能显示免费
         var wbReason = lt.workbuddy && lt.workbuddy.reason
-        var pending = wbReason === 'zero-pending' || wbReason === 'baseline-established' || wbReason === 'baseline-stale'
+        var pending = wbReason === 'zero-pending' || wbReason === 'baseline-established' || wbReason === 'baseline-stale' || wbReason === 'unconfirmed'
         var label
         if (one.length) {
           label = one.join(' / ')
         } else if (pending) {
-          label = '结算中…'
-        } else if (lt.allFree || wbReason === 'confirmed-zero') {
+          label = wbReason === 'unconfirmed' ? '积分未入账' : '结算中…'
+        } else if (lt.allFree) {
           label = '免费'
         } else {
           label = '—'
@@ -556,8 +555,13 @@
         parts.push(lt.workbuddy.spent + ' 积分')
       }
       if (!parts.length) {
-        // 还没有可显示的消耗：本轮刚结束，扣减未入账 → 静默等待复查，
-        // 不弹也不响（复查回写后 key 变化会再进来，那时才真正提示）
+        // 消耗还没到手：也弹一次提示「对话已结束，积分结算中」+ 响铃——
+        // 之前的静默导致用户以为气泡/音效坏了。复查到账后 key 变化
+        // 会再弹一次真实数字（带「结算完成」标记）。
+        if (lt.workbuddy && (wbReason === 'zero-pending' || wbReason === 'unconfirmed')) {
+          showTurnBubble('本轮对话结束，积分结算中…')
+          if (settings.sound) playChime()
+        }
         return
       }
       // 同一轮的第二次通知（延迟结算到账）标注出来，避免像重复弹
