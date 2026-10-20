@@ -19,9 +19,11 @@
  *   Step-5-Preview [免费]
  *   Deepseek-V4.1-Flash [主力] [夜间折扣]
  *
- * 悬停（仅 'option' 时）在下方显示两行：
- *   0.29x 倍率
- *   9月11日–10月31日，每晚 23:00—次日 8:00 享免费额度。
+  * 悬停（仅 'option' 时）显示模型信息：
+  *   倍率 / 促销 badge（上游实时）+ 限时提示 + 可用状态
+  *
+  * ⚠️ 促销时间窗不在本地硬编码 —— 上游 badge 本身就是实时状态，
+  *    本地写死日期会过期且与上游不同步。需要自定义说明走配置 promoDesc（见 README「配置」）。
  *
  * 两条硬性约束（踩过坑）：
  * 1. 返回空字符串会吞掉模型名 —— 内核只在 null/undefined 时用 fallback。
@@ -188,6 +190,13 @@ window.__ModuleLoader__.load({
       return !((hour >= 9 && hour < 12) || (hour >= 14 && hour < 18))
     }
 
+    /** 北京时间现在是否处于「夜间」时段（23:00–次日 8:00） */
+    function isNightNow() {
+      const d = new Date(Date.now() + 8 * 3600 * 1000)
+      const hour = d.getUTCHours()
+      return hour >= 23 || hour < 8
+    }
+
     /** 组装标签 */
     function buildTags(tier, modelId, meta) {
       const tags = []
@@ -267,7 +276,14 @@ window.__ModuleLoader__.load({
      */
     function buildHoverLines(modelId, meta) {
       const lines = []
-      lines.push(meta.free ? '免费' : (fmtRate(meta.credits) || '倍率未知'))
+      const isNightFree = (meta.badges || []).some((b) => String(b).indexOf('夜间免费') !== -1)
+      // 夜间免费模型（hy4-preview）：非夜间时段要按倍率计费，
+      // 所以第一行显示当前实际状态，而不是笼统的「免费」
+      if (isNightFree) {
+        lines.push(isNightNow() ? '夜间免费中' : (fmtRate(meta.credits) + '（仅夜间免费）'))
+      } else {
+        lines.push(meta.free ? '免费' : (fmtRate(meta.credits) || '倍率未知'))
+      }
 
       const desc = PROMO_DESC[modelId]
       if (desc) {
@@ -275,7 +291,15 @@ window.__ModuleLoader__.load({
       } else if (NIGHT_DISCOUNT.indexOf(modelId) !== -1) {
         lines.push('周一至周五 09:00–12:00、14:00–18:00 属高峰原价；中午、晚间与周末节假日为谷时 5 折。')
       } else if (meta.badges && meta.badges.length) {
-        lines.push(String(meta.badges.join(' · ')))
+        // badge 是上游实时状态（夜间免费/限时免费/独家限免…）。
+        // 本地不编造时间窗——那些日期会过期且与上游不同步；
+        // 只标注「限时」性质，并提示以官方公告为准。
+        const badges = meta.badges.map(String)
+        lines.push(badges.join(' · '))
+        const limited = badges.some((b) => /限|免费|折扣/.test(b))
+        if (limited) {
+          lines.push('⚠ 限时活动：有期限限制，结束后恢复原价/按倍率计费，以官方公告为准')
+        }
       }
       // ===== 可用状态 =====
       const lim = (limitCache && limitCache[modelId]) || {}
