@@ -227,11 +227,23 @@
         if (lt.workbuddy && typeof lt.workbuddy.spent === 'number' && lt.workbuddy.spent > 0) {
           one.push(lt.workbuddy.spent + ' 积分')
         }
-        // 积分扣减有延迟：本轮刚结束、还没入账时显示「结算中」而不是「免费」
+        // 「免费」只有在使用免费模型时才成立：
+        //  - allFree=true（本轮全部是 workbuddy 免费模型）→ 免费
+        //  - 付费模型但消耗没采到（扣减延迟/采样失败）→ 结算中…/—，绝不能显示免费
+        //  - 付费模型消耗已确认 0（confirmed-zero）→ 免费（罕见但合法）
         var wbReason = lt.workbuddy && lt.workbuddy.reason
         var pending = wbReason === 'zero-pending' || wbReason === 'baseline-established' || wbReason === 'baseline-stale'
-        var label = one.length ? one.join(' / ') : (pending ? '结算中…' : '免费')
-        body.appendChild(row('本轮', label, null, one.length ? 'warn' : (pending ? '' : 'free')))
+        var label
+        if (one.length) {
+          label = one.join(' / ')
+        } else if (pending) {
+          label = '结算中…'
+        } else if (lt.allFree || wbReason === 'confirmed-zero') {
+          label = '免费'
+        } else {
+          label = '—'
+        }
+        body.appendChild(row('本轮', label, null, one.length ? 'warn' : (label === '免费' ? 'free' : '')))
       }
 
       // 当天 / 当月两档
