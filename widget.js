@@ -64,6 +64,8 @@
       '.dshcw-toggle{opacity:.6;font-size:11px;padding:0 2px;flex:none}',
       '.dshcw-body{padding:0 10px 9px;display:flex;flex-direction:column;gap:5px}',
       '.dshcw-row{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12px;line-height:17px;white-space:nowrap}',
+      '.dshcw-row.narrow{white-space:normal;flex-direction:column;align-items:flex-start;gap:1px}',
+      '.dshcw-row.narrow .dshcw-val{white-space:normal;word-break:break-word}',
       '.dshcw-label{color:#9ca3af;display:flex;align-items:center;gap:5px}',
       '.dshcw-dot{width:7px;height:7px;border-radius:50%;flex:none}',
       '.dshcw-val{font-weight:700;font-variant-numeric:tabular-nums}',
@@ -326,7 +328,8 @@
 
   // ---------- 渲染 ----------
   function row(label, value, dotColor, valClass) {
-    var r = el('div', 'dshcw-row')
+    var narrow = settings.cardWidth < 200
+    var r = el('div', 'dshcw-row' + (narrow ? ' narrow' : ''))
     var l = el('div', 'dshcw-label')
     if (dotColor) {
       var d = el('span', 'dshcw-dot')
@@ -334,9 +337,22 @@
       l.appendChild(d)
     }
     l.appendChild(el('span', null, label))
-    r.appendChild(l)
     var v = el('div', 'dshcw-val' + (valClass ? ' ' + valClass : ''), value)
-    r.appendChild(v)
+    if (narrow) {
+      // 窄面板：上下两行布局，标签在上、数值在下，文字可换行不断字
+      r.style.flexDirection = 'column'
+      r.style.alignItems = 'flex-start'
+      r.style.gap = '1px'
+      l.style.width = '100%'
+      v.style.width = '100%'
+      v.style.whiteSpace = 'normal'
+      v.style.wordBreak = 'break-word'
+      r.appendChild(v)
+      r.appendChild(l)
+    } else {
+      r.appendChild(l)
+      r.appendChild(v)
+    }
     return r
   }
 
@@ -517,25 +533,37 @@
     try {
       if (!ledger || !ledger.ok || !ledger.lastTurn) return
       var lt = ledger.lastTurn
-      var key = lt.turn + ':' + lt.at
+      // 键 = 轮次 + 时间 + 积分值：积分延迟入账回写后 spent 变化 → 键变化
+      // → 同一轮能触发第二次通知（这次才是真实消耗 + 音效）
+      var wbSpent = lt.workbuddy && typeof lt.workbuddy.spent === 'number' ? lt.workbuddy.spent : 'x'
+      var key = lt.turn + ':' + lt.at + ':' + wbSpent + ':' + (Number(lt.costTokenBased) || 0)
       if (lastTurnSeen === null) {
         // 首次加载：只记录，不弹（避免刷新页面时重弹历史轮）
         lastTurnSeen = key
         return
       }
       if (key === lastTurnSeen) return
+      var firstNotice = lastTurnSeen.split(':')[0] !== String(lt.turn)
       lastTurnSeen = key
-      // 只弹 2 分钟内的轮次
+      // 只处理 2 分钟内的轮次
       if (Date.now() - Number(lt.at) > 120000) return
       if (!settings.bubble) return // 设置里关了气泡
-      // 组文案：积分 / 真钱 / 免费轮不弹
+
+      // 组文案：积分 / 真钱
       var parts = []
       if (Number(lt.costTokenBased) > 0) parts.push('¥' + fmtNum(lt.costTokenBased))
       if (lt.workbuddy && typeof lt.workbuddy.spent === 'number' && lt.workbuddy.spent > 0) {
         parts.push(lt.workbuddy.spent + ' 积分')
       }
-      if (!parts.length) return
-      showTurnBubble('本轮 ' + parts.join(' + '))
+      if (!parts.length) {
+        // 还没有可显示的消耗：本轮刚结束，扣减未入账 → 静默等待复查，
+        // 不弹也不响（复查回写后 key 变化会再进来，那时才真正提示）
+        return
+      }
+      // 同一轮的第二次通知（延迟结算到账）标注出来，避免像重复弹
+      var text = '本轮 ' + parts.join(' + ') + (firstNotice ? '' : '（结算完成）')
+      showTurnBubble(text)
+      // 音效与「真实消耗到手」同步：这里就是结算完成的时刻
       if (settings.sound) playChime()
     } catch (e) {}
   }
