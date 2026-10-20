@@ -215,15 +215,24 @@
   /** 找账户按钮元素（区别于 findAccountArea 的坐标版） */
   function findAccountButton() {
     try {
+      // 账户行在侧栏**最底部**：先找到侧栏容器（左侧贴边的滚动列），
+      // 再取其中位置最靠下的可见按钮。
       var candidates = document.querySelectorAll('button')
+      var best = null
+      var bestTop = -1
       for (var i = 0; i < candidates.length; i++) {
         var b = candidates[i]
         var r = b.getBoundingClientRect()
         if (r.width === 0 || r.height === 0) continue
-        if (r.left >= 0 && r.left < 60 && r.top > (window.innerHeight || 800) * 0.5 && r.height > 20 && r.height < 120) {
-          return b
-        }
+        if (r.height < 20 || r.height > 120) continue
+        // 侧栏特征：左边缘贴屏幕左侧（< 60px）
+        if (r.left < 0 || r.left >= 60) continue
+        // 在侧栏下半部（避免匹配到顶部品牌/新对话按钮）
+        if (r.top < (window.innerHeight || 800) * 0.5) continue
+        // 取**最靠下**的（账户行在最左下角）——之前取了第一个匹配，误中项目行
+        if (r.top > bestTop) { bestTop = r.top; best = b }
       }
+      return best
     } catch (e) {}
     return null
   }
@@ -235,19 +244,10 @@
   /** 找侧栏账户区（底部）的屏幕位置：返回 {left, top, width, height} 或 null */
   function findAccountArea() {
     try {
-      // DSH 的账户按钮由 settings.launcher slot 渲染。启发式查找：
-      // 左边缘贴屏幕左侧、位于屏幕下半部、可见的按钮 —— 侧栏底部的账户/设置按钮
-      var candidates = document.querySelectorAll('button')
-      var best = null
-      for (var i = 0; i < candidates.length; i++) {
-        var b = candidates[i]
-        var r = b.getBoundingClientRect()
-        if (r.width === 0 || r.height === 0) continue
-        if (r.left >= 0 && r.left < 60 && r.top > (window.innerHeight || 800) * 0.5 && r.height > 20 && r.height < 120) {
-          if (!best || r.top > best.top) best = { left: r.left, top: r.top, width: r.width, height: r.height }
-        }
-      }
-      return best
+      var b = findAccountButton()
+      if (!b) return null
+      var r = b.getBoundingClientRect()
+      return { left: r.left, top: r.top, width: r.width, height: r.height }
     } catch (e) { return null }
   }
 
