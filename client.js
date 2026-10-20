@@ -59,8 +59,8 @@ window.__ModuleLoader__.load({
       'hy4-preview': '9月11日–10月31日，每晚 23:00—次日 8:00 享免费额度。',
       'hy3': '7月6日–10月31日，每日赠送免费额度。',
       'step-5-preview': '10月12日-10月25日，独家官方合作享限时免费体验。',
-      'deepseek-v4.1-flash': '周一至周五 09:00–12:00、14:00–18:00 属高峰原价，非高峰期积分5折。',
-      'deepseek-v4-pro': '周一至周五 09:00–12:00、14:00–18:00 属高峰原价，非高峰期积分5折。',
+      'deepseek-v4.1-flash': '周一至周五 09:00–12:00、14:00–18:00 属高峰原价；中午、晚间与周末节假日为谷时 5 折。',
+      'deepseek-v4-pro': '周一至周五 09:00–12:00、14:00–18:00 属高峰原价；中午、晚间与周末节假日为谷时 5 折。',
       'glm-5.2': '每晚 23:00—次日 8:00 积分限时立减，错峰用更省。',
     }
 
@@ -199,11 +199,13 @@ window.__ModuleLoader__.load({
         tags.push({ text, bg, title: PROMO_DESC[modelId] || text })
       }
 
-      // 夜间折扣：deepseek 系按官方峰谷规则推算
+      // 峰谷折扣：deepseek 系按官方峰谷规则推算。
+      // 注意**不能叫「夜间折扣」**——非高峰包含中午 12-14、18-次日 9 点、
+      // 以及周末与法定节假日全天，夜间只是其中一段。
       if (NIGHT_DISCOUNT.indexOf(modelId) !== -1 && !badges.some(b => String(b).indexOf('折扣') !== -1)) {
         const offPeak = isOffPeakNow()
         tags.push({
-          text: offPeak ? '夜间折扣' : '高峰原价',
+          text: offPeak ? '谷时5折' : '高峰原价',
           bg: offPeak ? '#7c3aed' : '#9ca3af',
           title: PROMO_DESC[modelId] || '',
         })
@@ -262,7 +264,7 @@ window.__ModuleLoader__.load({
       if (desc) {
         lines.push(desc)
       } else if (NIGHT_DISCOUNT.indexOf(modelId) !== -1) {
-        lines.push('周一至周五 09:00–12:00、14:00–18:00 属高峰原价，非高峰期积分5折。')
+        lines.push('周一至周五 09:00–12:00、14:00–18:00 属高峰原价；中午、晚间与周末节假日为谷时 5 折。')
       } else if (meta.badges && meta.badges.length) {
         lines.push(String(meta.badges.join(' · ')))
       }
@@ -544,7 +546,7 @@ window.__ModuleLoader__.load({
       }, nodes)
     }
 
-    const inject = ['slots', 'locale', 'remote.session']
+    const inject = ['slots', 'locale']
 
     /**
      * 插件入口。
@@ -565,37 +567,6 @@ window.__ModuleLoader__.load({
 
     function applyInner(ctx) {
       const namespace = 'cost-tracker'
-
-      // ===== 树形选择器的 Remote 桥 =====
-      // remote.session 只存在于 client 半身的注入作用域（对 settings-models 的
-      // 源码核实：inject = ["slots","locale","remote",...,"remote.session"]），
-      // 裸页面脚本（widget.js）拿不到。这里把它桥到 window 全局约定点，
-      // 挂件通过 window.__dshCostWidgetApi 访问 modelCatalog / selectModel。
-      // 注意返回是 { ok, value } 包裹（Remote 快照形态），桥里统一解包。
-      try {
-        const session = ctx.remote && ctx.remote.session
-        if (session) {
-          window.__dshCostWidgetApi = {
-            modelCatalog: async () => {
-              const r = await Promise.resolve(session.modelCatalog())
-              if (r && r.ok === false) throw new Error(r.error && r.error.message || 'catalog failed')
-              // typert 快照：{ ok, value } 或直接对象两种形态都兼容
-              return (r && Object.prototype.hasOwnProperty.call(r, 'value')) ? r.value : r
-            },
-            selectModel: async (payload) => {
-              const r = await Promise.resolve(session.selectModel(payload))
-              if (r && r.ok === false) {
-                const msg = r.error && (r.error.message || r.error.code) || 'select failed'
-                throw new Error(String(msg))
-              }
-              return r
-            },
-          }
-        }
-      } catch (e) {
-        try { console.error('[dsh-cost-tracker] remote bridge failed:', e) } catch { /* 忽略 */ }
-      }
-
 
       ctx.effect(
         () => ctx.locale.register(namespace, {
