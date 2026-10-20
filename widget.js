@@ -648,11 +648,13 @@
     setEl.appendChild(r3)
 
     // 卡片宽度（预设档位；精细调整用面板右下角拖拽手柄）
+    // 档位按钮换行排列：四个 40px+ 按钮横排会超出 250px 的设置面板宽
     var r4 = rowOf('卡片宽度')
+    r4.style.flexWrap = 'wrap'
     var wWrap = el('div')
+    wWrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:4px;justify-content:flex-end;width:100%'
     ;[140, 230, 280, 330].forEach(function (w) {
       var b = el('span', 'dshcw-btn' + (settings.cardWidth === w ? ' on' : ''), w + 'px')
-      b.style.marginLeft = '4px'
       b.addEventListener('click', function () {
         settings.cardWidth = w
         saveSettings()
