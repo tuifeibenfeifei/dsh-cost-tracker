@@ -39,7 +39,7 @@
     "client": {
       "platform": "web",
       "immediately": true,
-      "inject": ["remote.session"]
+      "inject": ["@deepseek-ai/dsh-api-remotes"]
     }
   }
 }
