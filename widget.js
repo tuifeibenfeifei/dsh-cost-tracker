@@ -139,11 +139,14 @@
 
   function applyPos(p) {
     if (!root || !p) return
-    // 钳制时保留卡片完整宽度：不能让卡片被推到视口外被挤压换行。
-    // CARD_W 必须与 CSS 里 .dshcw-card 的 width 一致。
+    // 四边都按卡片**实际尺寸**钳制：水平用固定宽度（与 CSS .dshcw-card 一致），
+    // 垂直用卡片当前 offsetHeight（展开/折叠高度不同，不能写死）。
+    // 否则往下拖卡片会沉出 DSH 界面，内容看不见也拖不回来。
     var CARD_W = 230
+    var card = root.firstElementChild
+    var h = (card && card.offsetHeight) || 160
     var maxL = (window.innerWidth || 1200) - CARD_W - 4
-    var maxT = (window.innerHeight || 800) - 40
+    var maxT = (window.innerHeight || 800) - h - 4
     root.style.left = Math.max(0, Math.min(p.left, maxL)) + 'px'
     root.style.top = Math.max(0, Math.min(p.top, maxT)) + 'px'
   }
