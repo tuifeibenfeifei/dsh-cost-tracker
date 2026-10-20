@@ -265,7 +265,11 @@
         if (lt.workbuddy && typeof lt.workbuddy.spent === 'number' && lt.workbuddy.spent > 0) {
           one.push(lt.workbuddy.spent + ' 积分')
         }
-        body.appendChild(row('单轮 #' + lt.turn, one.length ? one.join(' / ') : '免费', null, one.length ? 'warn' : 'free'))
+        // 积分扣减有延迟：本轮刚结束、还没入账时显示「结算中」而不是「免费」
+        var wbReason = lt.workbuddy && lt.workbuddy.reason
+        var pending = wbReason === 'zero-pending' || wbReason === 'baseline-established' || wbReason === 'baseline-stale'
+        var label = one.length ? one.join(' / ') : (pending ? '结算中…' : '免费')
+        body.appendChild(row('本轮', label, null, one.length ? 'warn' : (pending ? '' : 'free')))
       }
 
       // 当天 / 当月两档
