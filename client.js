@@ -1352,10 +1352,17 @@ window.__ModuleLoader__.load({
             //   · 别的会话完成一轮 → 本界面也弹气泡（误触发）
             //   · 同一会话连续两轮 turn 相同 → 不弹（漏触发）
             // 所以 key 取「sessionId:turn」，只有它变了才算新回合。
-            const key = lt ? (String(lt.sessionId || '') + ':' + cur) : ''
-            const prevKey = noticeShared ? noticeShared.key : ''
+            // ⚠️ prevKey 必须保证是字符串，不能是 undefined。
+            // 见下方 recommend 回调处对 noticeShared 兜底对象的说明：
+            // 一旦 key 字段缺失，这里拿到 undefined 会让
+            // `prevKey !== ''` 恒假，气泡永远不触发。
+            const prevKey = noticeShared && typeof noticeShared.key === 'string' ? noticeShared.key : ''
+            // 只有「上一轮基准已建立 且 组合 key 变了」才算新回合：
+            // 首次 poll 只建基准不弹，避免每次开页面都重放历史气泡。
+            const hasBaseline = prevKey !== ''
+            const isNewTurn = hasBaseline && key !== prevKey
             let toast = null
-            if (cur > 0 && prevKey !== '' && key !== prevKey && lt) {
+            if (cur > 0 && isNewTurn && lt) {
               const wb = lt.workbuddy || {}
               let text
               let kind = 'info'
@@ -1396,7 +1403,15 @@ window.__ModuleLoader__.load({
           }).catch(() => {})
           pFetch('/cost-tracker/recommend').then((j) => {
             if (!alive || !j || !j.advice) return
-            if (!noticeShared) noticeShared = { ledger: null, lastTurn: 0, toast: null }
+            // ⚠️ 兜底对象必须带 key:''。
+            // 两个请求是并发的，谁先返回不确定。若 recommend 先回来并在这里
+            // 建了一个没有 key 字段的对象，下一次 ledger 回调读
+            // `prevKey = noticeShared.key` 会得到 undefined，
+            // 于是 `prevKey !== ''` 为 false → 永远进不了「新回合」分支
+            // → toast 恒为 null → 气泡永远不显示。
+            // （2026-10-22 实测：lastTurn 正确变 206，但 toast 一直是 null，
+            //  用户反馈「再触发一次冒泡，我没看见」就是这个原因。）
+            if (!noticeShared) noticeShared = { ledger: null, lastTurn: 0, key: '', toast: null }
             const prevLevel = noticeShared.advice ? noticeShared.advice.level : ''
             const prevMsg = noticeShared.advice ? noticeShared.advice.message : ''
             noticeShared.advice = j.advice
