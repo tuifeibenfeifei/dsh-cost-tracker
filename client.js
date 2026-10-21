@@ -863,21 +863,50 @@ window.__ModuleLoader__.load({
       '.dshctn-tip.ok{background:var(--dsw-alias-state-success-primary,rgba(34,160,107,.1));',
       '  border:1px solid var(--dsw-alias-state-success-primary,rgba(34,160,107,.3))}',
       // 帧级气泡：位置/尺寸由 toastStyle() 以**内联样式**下发（用户可配），
+      // 帧级气泡：位置/尺寸由 toastStyle() 以**内联样式**下发（用户可配），
       // 这里只留与位置无关的外观，避免两处 left/top 打架。
-      // align-items 用 flex-start：多行文本从顶部起排，内容超高时可滚，
-      // 不会像 center 那样上下同时被裁。
+      // align-items 用 flex-start：多行文本从顶部起排，不会像 center 那样被裁。
+      //
+      // 配色按「类别」区分（用户要求「调成显眼的，把背景边框颜色做区分」）：
+      //   spend   花积分 → 琥珀色背景 + 左侧竖条，提醒「这轮在花钱」
+      //   free    免费   → 绿色背景，让人放心
+      //   pending 未入账 → 红色背景，需要留意
+      // 每类都同时改 背景/边框/文字色 三重信号，而不只是边框——
+      // 只描边在深色主题下几乎看不出来。
       '.dshctn-float{display:inline-flex;align-items:flex-start;gap:6px;',
-      '  border-radius:12px;line-height:1.45;font-weight:600;',
+      '  border-radius:10px;line-height:1.45;font-weight:700;',
       '  white-space:normal;word-break:break-word;text-align:left;',
-      '  box-shadow:0 6px 20px rgba(0,0,0,.22);',
-      '  color:var(--dsw-alias-text-primary,inherit);',
+      '  box-shadow:0 8px 26px rgba(0,0,0,.38);',
+      '  border-width:1px;border-style:solid;',
+      '  border-left-width:4px;',          /* 左侧色条：最强的视觉区分 */
+      '  color:var(--dsw-alias-text-primary,#f5f5f5);',
       '  background:var(--dsw-alias-bg-layer-2,#1f2430);',
-      '  border:1px solid var(--dsw-alias-border-primary,rgba(127,127,127,.3));',
+      '  border-color:var(--dsw-alias-border-primary,rgba(127,127,127,.3));',
       '  animation:dshctn-in .18s ease-out}',
-      '@keyframes dshctn-in{from{opacity:0}to{opacity:1}}',
-      '.dshctn-float.spend{border-color:var(--dsw-alias-state-warning-primary,rgba(251,191,36,.6))}',
-      '.dshctn-float.free{border-color:var(--dsw-alias-state-success-primary,rgba(34,160,107,.6))}',
-      '.dshctn-float.pending{border-color:var(--dsw-alias-state-error-primary,rgba(217,45,32,.5))}',
+      '@keyframes dshctn-in{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}',
+      // 花积分：琥珀警告色（文字也提亮，不只是边框）
+      '.dshctn-float.spend{',
+      '  background:rgba(120,66,18,.92);',
+      '  border-color:rgba(251,191,36,.85);',
+      '  border-left-color:#fbbf24;',
+      '  color:#fef3c7}',
+      // 免费：绿色
+      '.dshctn-float.free{',
+      '  background:rgba(20,83,45,.92);',
+      '  border-color:rgba(52,211,153,.75);',
+      '  border-left-color:#34d399;',
+      '  color:#d1fae5}',
+      // 未入账：红色
+      '.dshctn-float.pending{',
+      '  background:rgba(110,26,26,.92);',
+      '  border-color:rgba(248,113,113,.8);',
+      '  border-left-color:#f87171;',
+      '  color:#fee2e2}',
+      // 普通信息
+      '.dshctn-float.info{',
+      '  background:rgba(31,36,48,.95);',
+      '  border-color:rgba(127,127,127,.45);',
+      '  border-left-color:#94a3b8}',
     ].join('')
 
     let panelCssMounted = false
@@ -1843,15 +1872,18 @@ window.__ModuleLoader__.load({
         flexDirection: 'column',
         alignItems: 'stretch',
         justifyContent: 'flex-start',
-        borderRadius: '12px',
         cursor: active ? 'grabbing' : 'grab',
         userSelect: 'none',
         touchAction: 'none',
-        // 与真实气泡完全相同的配色，所见即所得
-        color: 'var(--dsw-alias-text-primary,inherit)',
-        background: 'var(--dsw-alias-bg-layer-2,#1f2430)',
-        border: '1px solid var(--dsw-alias-state-success-primary,#22a06b)',
-        boxShadow: '0 6px 20px rgba(0,0,0,.28)',
+        // 与真实气泡同一套类别配色（预览示例用 spend 风格：最花哨，
+        // 也最能让用户看清宽度和字号的观感）
+        color: '#fef3c7',
+        background: 'rgba(120,66,18,.92)',
+        border: '1px solid rgba(251,191,36,.85)',
+        borderLeft: '4px solid #fbbf24',
+        fontWeight: 700,
+        borderRadius: '10px',
+        boxShadow: '0 8px 26px rgba(0,0,0,.38)',
         // 预览文案用 \n 分行，需要 pre-line 才生效
         whiteSpace: 'pre-line',
         textAlign: 'left',
