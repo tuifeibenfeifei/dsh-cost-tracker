@@ -860,6 +860,9 @@ window.__ModuleLoader__.load({
       const [pick, setPick] = useState('')
       const [text, setText] = useState('')
       const [saved, setSaved] = useState('')
+      // 手动结算状态
+      const [reconciling, setReconciling] = useState(false)
+      const [recoMsg, setRecoMsg] = useState('')
 
       const load = useCallback(() => {
         pFetch('/cost-tracker/summary').then(setSummary)
@@ -905,6 +908,28 @@ window.__ModuleLoader__.load({
           })
           .catch(() => setSaved('保存失败'))
       }, [pick, text, load])
+
+      /**
+       * 手动结算未结清轮次（面板「刷新积分」按钮）。
+       * 服务端用当前余额与最早未结清轮次的基准相减，补记消耗并回写 totals。
+       * 成功后重新拉数据，警告条会因 unsettled 归零而自动消失。
+       */
+      const reconcile = useCallback(() => {
+        setReconciling(true)
+        setRecoMsg('')
+        fetch('/cost-tracker/reconcile', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({}),
+        })
+          .then((r) => r.json())
+          .then((j) => {
+            setRecoMsg(j && j.message ? j.message : (j && j.reason ? '结算失败：' + j.reason : '结算失败'))
+            load()
+          })
+          .catch((e) => setRecoMsg('结算失败：' + (e && e.message ? e.message : '网络错误')))
+          .then(() => { setReconciling(false); setTimeout(() => setRecoMsg(''), 8000) })
+      }, [load])
 
       const db = summary && summary.deepseekBalance
       const al = summary && summary.aliyun
@@ -970,11 +995,33 @@ window.__ModuleLoader__.load({
           ])
           : null,
 
-        // ---- 结算异常 ----
+        // ---- 结算异常 + 手动结算按钮 ----
+        // 「N 轮积分未结清」以前是一条永远消不掉的警告——用户没有任何
+        // 办法让它消失。这里给一个「刷新积分」按钮：拉一次当前余额，
+        // 用最早未结清轮次的基准与余额差补记消耗，然后警告自然消失。
         ledger && ledger.settlement && ledger.settlement.unsettled > 0
-          ? h('div', { key: 'set', className: 'dshctp-tip bad' },
-            '⚠ 最近 ' + ledger.settlement.recent + ' 轮里有 ' + ledger.settlement.unsettled
-            + ' 轮积分未结清：该轮消耗未确认，累计积分可能偏低。')
+          ? h('div', { key: 'set', className: 'dshctp-tip bad' }, [
+            h('div', { key: 'txt' },
+              '⚠ 最近 ' + ledger.settlement.recent + ' 轮里有 ' + ledger.settlement.unsettled
+              + ' 轮积分未结清：该轮消耗未确认，累计积分可能偏低。'),
+            h('div', { key: 'act', className: 'dshctp-actions', style: { marginTop: '8px', justifyContent: 'flex-start' } }, [
+              h('button', {
+                key: 'rc',
+                className: 'dshctp-btn',
+                type: 'button',
+                disabled: !!reconciling,
+                onClick: reconcile,
+              }, reconciling ? '结算中…' : '刷新积分并结算'),
+              recoMsg ? h('span', { key: 'm', className: 'dshctp-hint' }, recoMsg) : null,
+            ]),
+          ])
+          : null,
+
+        // ---- 无法归因的轮次（余额上升导致）----
+        ledger && ledger.settlement && ledger.settlement.unresolvable > 0
+          ? h('div', { key: 'unr', className: 'dshctp-tip' },
+            '⚠ 有 ' + ledger.settlement.unresolvable + ' 轮无法归因：期间余额上升'
+            + '（充值或发放权益），无法从余额差反推消耗。可点「刷新积分」重试。')
           : null,
 
         // ---- 主动建议 ----

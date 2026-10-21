@@ -486,16 +486,43 @@
       // 注：阿里云不进记账——token 推算偏差 26.6 倍，无可信金额
     }
 
-    // ===== 结算异常提示（最重要，放在记账区正上方）=====
-    // 以前 unconfirmed / zero-pending 只躺在状态文件里，面板一字不提，
-    // 用户看到的就是「莫名就不能用了，还没报错」。这里把实话说出来。
+    // ===== 结算异常提示 + 手动结算按钮 =====
+    // 以前这条警告永远消不掉，用户毫无办法。现在给一个「刷新积分」按钮：
+    // 拉当前余额，用最早未结清轮次的基准与余额差补记消耗，警告随之消失。
     if (ledger && ledger.settlement && ledger.settlement.unsettled > 0) {
       var st = ledger.settlement
       var last = st.reasons && st.reasons.length ? st.reasons[st.reasons.length - 1] : null
       var msg = '⚠ 最近 ' + st.recent + ' 轮里有 ' + st.unsettled + ' 轮积分未结清'
         + (last ? '（' + (last.model || '?') + '）' : '')
         + '：该轮消耗未确认，累计积分可能偏低'
-      body.appendChild(el('div', 'dshcw-tip', msg))
+      var tip = el('div', 'dshcw-tip')
+      tip.appendChild(el('div', null, msg))
+      var btn = el('button', 'dshcw-btn')
+      btn.textContent = '刷新积分并结算'
+      btn.style.marginTop = '5px'
+      btn.addEventListener('click', function () {
+        btn.textContent = '结算中…'
+        btn.disabled = true
+        fetch('/cost-tracker/reconcile', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: '{}',
+        }).then(function (r) { return r.json() }).then(function (j) {
+          var m = el('div', 'dshcw-hint')
+          m.textContent = j && j.message ? j.message : '结算失败'
+          tip.appendChild(m)
+          tick()
+        }).catch(function (e) {
+          var m = el('div', 'dshcw-hint')
+          m.textContent = '结算失败：' + (e && e.message ? e.message : '网络错误')
+          tip.appendChild(m)
+        }).then(function () {
+          btn.textContent = '刷新积分并结算'
+          btn.disabled = false
+        })
+      })
+      tip.appendChild(btn)
+      body.appendChild(tip)
     }
 
     // 主动省钱建议（最重要，放最上面显眼位置）
