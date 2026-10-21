@@ -1166,22 +1166,15 @@ window.__ModuleLoader__.load({
       //   sidebar.panellist 注册一个图标行 + main 注册一个 panel，
       //   点击行由宿主 layout.selectPanel() 切换到我们的 panel。
       // 这是宿主公开契约里唯一支持的「一键打开一个页面」路径。
+      //
+      // ⚠️ 不再保留浮层兜底。历史上浮层（widget.js）带来两个反复出现的 bug：
+      //   1) 桌面端 index-inject 表是启动期一次性收集，热重载/刷新常丢失
+      //      → 「插件时不时消失」；
+      //   2) 浮层自带的 💰 按钮会贴到侧栏账户行右端，与正式侧栏行**并存**，
+      //      出现「瞬移到用户头像位置并覆盖头像」。
+      // 侧栏行由本 client 半区在每次页面加载时重新注册，本就是稳定入口，
+      // 浮层只会制造重复入口，故彻底移除。
       registerSidebarEntry(ctx, namespace)
-
-      // ---- 浮层兜底：仅在侧栏行不可用时才注入 ----
-      // 桌面端的 index-inject 表是启动期一次性收集的，热重载/刷新常丢失，
-      // 所以以前靠它注入 widget.js 会「时不时消失」。现在侧栏行由本 client
-      // 半区在每次页面加载时重新注册，是稳定入口；浮层只在侧栏行没注册上
-      // （宿主太老不认 sidebar.panellist）时才兜底。
-      ctx.slots.inject('sidebar.panellist', () => {
-        try { window.__dshCostSidebarReady = true } catch { /* 忽略 */ }
-      })
-      if (!window.__dshCostSidebarReady) {
-        // 异步确认：inject 回调可能晚于本语句执行，给一帧再判一次
-        setTimeout(() => {
-          if (!window.__dshCostSidebarReady) injectWidgetScript()
-        }, 0)
-      }
     }
 
     /**
@@ -1248,32 +1241,6 @@ window.__ModuleLoader__.load({
         h('path', { key: 'b', d: 'M3 9h18l-1.6 10.2a2 2 0 0 1-2 1.8H6.6a2 2 0 0 1-2-1.8L3 9Z' }),
         h('path', { key: 'h', d: 'M8.5 9V6.5a3.5 3.5 0 0 1 7 0V9' }),
       ])
-    }
-
-    /**
-     * 在浏览器里把费用浮层脚本注入页面（幂等：重复调用只留一个）。
-     * 用原生 DOM 注入，不依赖任何 DSH 注入表，因此每次页面加载都必然生效。
-     *
-     * ⚠️ 只在侧栏行**没有**注册成功时才调用：侧栏行（sidebar.panellist +
-     * main panel）才是用户要的正式入口，浮层只是兜底，两者不该并存。
-     */
-    function injectWidgetScript() {
-      try {
-        if (typeof document === 'undefined') return
-        if (window.__dshCostSidebarReady) return
-        if (window.__dshCostWidgetInjected) return
-        // 避免和插件启动期的 index-inject 钩子重复加载（同源脚本浏览器会复用）
-        const existing = document.querySelector('script[src="/cost-tracker/widget.js"]')
-        if (existing) { window.__dshCostWidgetInjected = true; return }
-        const s = document.createElement('script')
-        s.src = '/cost-tracker/widget.js'
-        s.async = false
-        s.onerror = function () { window.__dshCostWidgetInjected = false }
-        ;(document.body || document.head || document.documentElement).appendChild(s)
-        window.__dshCostWidgetInjected = true
-      } catch (e) {
-        try { console.error('[dsh-cost-tracker] injectWidgetScript failed:', e) } catch { /* 忽略 */ }
-      }
     }
 
     exports.apply = apply
