@@ -1188,7 +1188,25 @@ window.__ModuleLoader__.load({
         // ---- 气泡外观设置 ----
         h(ToastPrefsCard, { key: 'toastprefs' }),
         ]),
+        // 拖动预览挂在 root 上（不随内容滚动），自定义模式下才显示
+        h(ToastDragPreviewHost, { key: 'dragpreview' }),
       ])
+    }
+
+    /**
+     * 拖动预览的挂载点：只在用户选了「自定义」时渲染。
+     * 订阅偏好变化，切到自定义的瞬间预览气泡就出现。
+     */
+    function ToastDragPreviewHost() {
+      const [pref, setPref] = useState(() => readToastPref())
+      useEffect(() => {
+        const fn = (next) => setPref({ ...next, custom: { ...next.custom } })
+        toastPrefListeners.add(fn)
+        return () => { toastPrefListeners.delete(fn) }
+      }, [])
+      const isCustom = pref.position === 'custom' || pref.size === 'custom'
+      if (!isCustom) return null
+      return h(ToastDragPreview)
     }
 
     const inject = ['slots', 'locale']
@@ -1498,11 +1516,191 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * 可拖动的气泡预览：直接在页面上拖主体移动、拖四角改大小。
+     *
+     * 为什么不用「手填 X/Y/宽/高」：那种方式要先在脑子里换算坐标，
+     * 填完还得想象效果，用户实测评价是「太垃圾」。拖拽所见即所得，
+     * 拖完松手即保存，是这个场景真正合适的交互。
+     *
+     * 实现要点：
+     * - 拖动用 window 级 pointermove/pointerup 监听，而不是在被拖元素上，
+     *   否则鼠标快速移动会脱离元素、拖拽中断。
+     * - 用 Pointer Events 而不是 mouse 事件，触控板/触屏都能用。
+     * - 拖动过程中只改本地 state（不写 localStorage），松手才落盘，
+     *   避免每帧写存储。
+     * - 四个角各自有独立的向左/向右、向上/向下的缩放逻辑；
+     *   拖左上角时 left 与 width 要反向联动（这是最容易写错的地方）。
+     * - 所有结果都夹在视口内，绝不把气泡拖出屏幕外。
+     */
+    function ToastDragPreview() {
+      const [pref, setPref] = useState(() => readToastPref())
+      // 拖动中的临时几何，松手才写回持久化
+      const [geo, setGeo] = useState(null)
+      const [active, setActive] = useState(false)
+      const dragRef = useRef(null)
+
+      useEffect(() => {
+        const fn = (next) => setPref({ ...next, custom: { ...next.custom } })
+        toastPrefListeners.add(fn)
+        return () => { toastPrefListeners.delete(fn) }
+      }, [])
+
+      const cur = geo || {
+        x: pref.custom.x,
+        y: pref.custom.y,
+        width: pref.custom.width,
+        height: pref.custom.height > 0 ? pref.custom.height : 120,
+      }
+
+      // 统一开始拖拽：mode 为 'move' 或四角之一 'nw'/'ne'/'sw'/'se'
+      const startDrag = (mode) => (ev) => {
+        try {
+          ev.preventDefault()
+          ev.stopPropagation()
+        } catch { /* 忽略 */ }
+        const begin = { ...cur }
+        const startX = ev.clientX
+        const startY = ev.clientY
+        dragRef.current = { mode, begin, startX, startY }
+        setActive(true)
+
+        const onMove = (e) => {
+          const d = dragRef.current
+          if (!d) return
+          const dx = e.clientX - d.startX
+          const dy = e.clientY - d.startY
+          const b = d.begin
+          // 视口边界：留 8px 余量，避免贴死后抓不住
+          const vw = (window.innerWidth || 1200) - 8
+          const vh = (window.innerHeight || 800) - 8
+          let next = { ...b }
+
+          if (d.mode === 'move') {
+            next.x = clampNum(b.x + dx, 0, Math.max(0, vw - b.width), b.x)
+            next.y = clampNum(b.y + dy, 0, Math.max(0, vh - b.height), b.y)
+          } else {
+            // 四角缩放。左/上边被拖动时，位置与尺寸反向联动：
+            // 往左拖 → x 减小、width 增大；往右拖 → x 增大、width 减小。
+            if (d.mode === 'se') {
+              next.width = clampNum(b.width + dx, 120, 800, b.width)
+              next.height = clampNum(b.height + dy, 40, 600, b.height)
+            } else if (d.mode === 'sw') {
+              const w = clampNum(b.width - dx, 120, 800, b.width)
+              next.x = clampNum(b.x + (b.width - w), 0, vw, b.x)
+              next.width = w
+              next.height = clampNum(b.height + dy, 40, 600, b.height)
+            } else if (d.mode === 'ne') {
+              const h = clampNum(b.height - dy, 40, 600, b.height)
+              next.y = clampNum(b.y + (b.height - h), 0, vh, b.y)
+              next.height = h
+              next.width = clampNum(b.width + dx, 120, 800, b.width)
+            } else if (d.mode === 'nw') {
+              const w = clampNum(b.width - dx, 120, 800, b.width)
+              const h = clampNum(b.height - dy, 40, 600, b.height)
+              next.x = clampNum(b.x + (b.width - w), 0, vw, b.x)
+              next.y = clampNum(b.y + (b.height - h), 0, vh, b.y)
+              next.width = w
+              next.height = h
+            }
+            // 缩放后仍要保证整个气泡在视口内
+            next.x = Math.min(next.x, Math.max(0, vw - next.width))
+            next.y = Math.min(next.y, Math.max(0, vh - next.height))
+          }
+          setGeo(next)
+        }
+
+        const onUp = () => {
+          const d = dragRef.current
+          dragRef.current = null
+          setActive(false)
+          window.removeEventListener('pointermove', onMove)
+          window.removeEventListener('pointerup', onUp)
+          window.removeEventListener('pointercancel', onUp)
+          // 松手落盘：同时切到 custom 模式，真实气泡立刻用这套几何
+          setGeo((g) => {
+            if (g) {
+              writeToastPref({ custom: g, position: 'custom', size: 'custom' })
+            }
+            return null
+          })
+          void d
+        }
+
+        window.addEventListener('pointermove', onMove)
+        window.addEventListener('pointerup', onUp)
+        window.addEventListener('pointercancel', onUp)
+      }
+
+      // 预览用与真实气泡相同的字号自适应规则，所见即所得
+      const style = {
+        position: 'fixed',
+        left: cur.x + 'px',
+        top: cur.y + 'px',
+        width: cur.width + 'px',
+        height: cur.height + 'px',
+        boxSizing: 'border-box',
+        zIndex: 13500,
+        display: 'flex',
+        alignItems: 'center',
+        gap: '6px',
+        borderRadius: '12px',
+        cursor: active ? 'grabbing' : 'grab',
+        userSelect: 'none',
+        touchAction: 'none',
+        color: 'var(--dsw-alias-text-primary,inherit)',
+        background: 'var(--dsw-alias-bg-layer-2,#1f2430)',
+        border: '1px dashed var(--dsw-alias-state-success-primary,#22a06b)',
+        boxShadow: '0 8px 24px rgba(0,0,0,.28)',
+        overflow: 'auto',
+        ...(pref.autoFit
+          ? (() => {
+            const fs = Math.max(10, Math.min(24, Math.round(cur.width / 24)))
+            const padX = Math.max(8, Math.min(24, Math.round(cur.width / 20)))
+            const padY = Math.max(5, Math.min(18, Math.round(fs * 0.7)))
+            return { fontSize: fs + 'px', padding: padY + 'px ' + padX + 'px', lineHeight: 1.45 }
+          })()
+          : { fontSize: '12.5px', padding: '8px 12px', lineHeight: 1.45 }),
+      }
+
+      // 四个角的抓手
+      const handle = (corner, cursor, css) => h('div', {
+        key: corner,
+        onPointerDown: startDrag(corner),
+        style: {
+          position: 'absolute',
+          width: '14px',
+          height: '14px',
+          cursor,
+          background: 'var(--dsw-alias-state-success-primary,#22a06b)',
+          borderRadius: '3px',
+          opacity: 0.85,
+          touchAction: 'none',
+          ...css,
+        },
+        title: '拖动改变大小',
+      })
+
+      return h('div', { style: { position: 'relative' } }, [
+        h('div', {
+          key: 'preview',
+          style,
+          onPointerDown: startDrag('move'),
+          title: '拖动移动位置',
+        }, [
+          h('span', { key: 't' }, '🧾 本轮消耗 12 积分（拖动我）'),
+          handle('nw', 'nwse-resize', { left: '-7px', top: '-7px' }),
+          handle('ne', 'nesw-resize', { right: '-7px', top: '-7px' }),
+          handle('sw', 'nesw-resize', { left: '-7px', bottom: '-7px' }),
+          handle('se', 'nwse-resize', { right: '-7px', bottom: '-7px' }),
+        ]),
+      ])
+    }
+
+    /**
      * 气泡外观设置（持久化到 localStorage）。
      *
      * 为什么要可配置：气泡固定在某个屏幕位置，而每个人的侧栏宽度、显示器
      * 尺寸、缩放比例都不同，写死的坐标对别人可能正好压在对话区上。
-     * 提供「位置预设 + 尺寸 + 停留时长」三个开关，比让用户自己改 CSS 现实。
      *
      * 存储键独立于宿主，卸载插件不影响宿主任何数据；读失败一律退回默认值。
      */
@@ -1653,8 +1851,6 @@ window.__ModuleLoader__.load({
     /** 设置区：位置 / 尺寸 / 停留时长，含自定义坐标与宽高 */
     function ToastPrefsCard() {
       const [pref, setPref] = useState(() => readToastPref())
-      // 拖动中的临时值：松手才落盘，避免每帧写 localStorage
-      const [drag, setDrag] = useState(null)
       useEffect(() => {
         const fn = (next) => setPref({ ...next, custom: { ...next.custom } })
         toastPrefListeners.add(fn)
@@ -1669,22 +1865,6 @@ window.__ModuleLoader__.load({
         onClick,
       }, label)
 
-      const numField = (label, value, min, max, onChange, key, hint) => h('label', {
-        key,
-        className: 'dshctp-num',
-      }, [
-        h('span', { key: 'l' }, label),
-        h('input', {
-          key: 'i',
-          type: 'number',
-          min,
-          max,
-          value,
-          onChange: (e) => onChange(clampNum(e.target.value, min, max, value)),
-        }),
-        hint ? h('span', { key: 'h', className: 'dshctp-hint' }, hint) : null,
-      ])
-
       const positions = [
         ['left', '左侧栏旁'],
         ['top-right', '右上角'],
@@ -1695,9 +1875,10 @@ window.__ModuleLoader__.load({
       const sizes = [['small', '小'], ['normal', '中'], ['large', '大'], ['custom', '自定义']]
       const durations = [[4000, '4 秒'], [6000, '6 秒'], [10000, '10 秒'], [0, '常驻']]
 
-      const isCustom = pref.position === 'custom' || pref.size === 'custom'
-      const c = drag || pref.custom
+      const c = pref.custom
 
+      // 当前几何值（只读展示，方便核对；真正改尺寸靠拖动）
+      const isCustom = pref.position === 'custom' || pref.size === 'custom'
       return h('div', { className: 'dshctp-card' }, [
         h('h3', { key: 'h' }, '气泡提示'),
 
@@ -1709,37 +1890,22 @@ window.__ModuleLoader__.load({
         h('div', { key: 'sv' }, sizes.map(([v, label]) =>
           chip(label, pref.size === v, () => writeToastPref({ size: v }), 'size-' + v))),
 
-        // 自定义坐标与宽高：**始终显示**，不必先点「自定义」。
-        // 用户直接填数值就会自动切到自定义模式——要求先点一次按钮才出现
-        // 输入框，正是「没有自定义功能」的观感来源。
-        h('div', { key: 'custom', className: 'dshctp-custom' }, [
-          h('div', { key: 't', className: 'dshctp-hint' }, [
-            isCustom ? '自定义位置与大小（单位 px）' : '自定义位置与大小（填数值即启用）',
-          ]),
-          h('div', { key: 'xy', className: 'dshctp-numrow' }, [
-            numField('X 坐标', c.x, 0, 4000, (v) => setDrag({ ...c, x: v }), 'x', '距左'),
-            numField('Y 坐标', c.y, 0, 4000, (v) => setDrag({ ...c, y: v }), 'y', '距上'),
-          ]),
-          h('div', { key: 'wh', className: 'dshctp-numrow' }, [
-            numField('宽度', c.width, 120, 800, (v) => setDrag({ ...c, width: v }), 'w', '120–800'),
-            numField('高度', c.height, 0, 600, (v) => setDrag({ ...c, height: v }), 'h', '0=自适应'),
-          ]),
-          h('div', { key: 'act', className: 'dshctp-actions', style: { justifyContent: 'flex-start' } }, [
+        // 拖动预览：所见即所得，替代原先四个数字输入框
+        h('div', { key: 'drag', className: 'dshctp-custom' }, [
+          h('div', { key: 't', className: 'dshctp-hint' },
+            '拖动气泡移动位置，拖四个角改变大小（松手即保存）'),
+          h('div', { key: 'act', className: 'dshctp-actions', style: { justifyContent: 'flex-start', marginTop: '6px' } }, [
             h('button', {
-              key: 'apply',
+              key: 'on',
               type: 'button',
-              className: 'dshctp-btn primary',
-              // 应用自定义时同时切到 custom 模式，避免「数值改了但没生效」
-              onClick: () => { writeToastPref({ custom: c, position: 'custom', size: 'custom' }); setDrag(null) },
-            }, '应用自定义'),
-            drag ? h('button', {
-              key: 'cancel',
-              type: 'button',
-              className: 'dshctp-btn',
-              onClick: () => setDrag(null),
-            }, '取消') : null,
+              className: 'dshctp-btn' + (isCustom ? ' primary' : ''),
+              onClick: () => writeToastPref({ position: 'custom', size: 'custom' }),
+            }, isCustom ? '✓ 拖动预览已开启' : '开启拖动预览'),
           ]),
-          drag ? h('div', { key: 'dirty', className: 'dshctp-hint' }, '有未应用的改动') : null,
+          h('div', { key: 'hint', className: 'dshctp-hint', style: { marginTop: '2px', opacity: 0.8 } },
+            isCustom
+              ? '页面上已出现可拖动的预览气泡，拖好后它就是真实提示的位置与大小。'
+              : '点上面的按钮后，页面上会出现一个可拖动的预览气泡。'),
         ]),
 
         // 自适应字号
@@ -1755,8 +1921,12 @@ window.__ModuleLoader__.load({
           chip(label, pref.durationMs === v, () => writeToastPref({ durationMs: v }), 'dur-' + v))),
 
         h('div', { key: 'n', className: 'dshctp-hint', style: { marginTop: '6px' } },
-          '选「自定义」后可自由设置气泡的坐标与宽高；开启「字号自适应」时，'
-          + '字号与内边距会随宽高按比例变化。高度填 0 表示由内容决定。'),
+          '开启「字号自适应」后，字号与内边距会随气泡宽高按比例变化。'),
+
+        // 当前几何值（只读展示，方便核对；真正改尺寸靠拖动）
+        h('div', { key: 'geo', className: 'dshctp-hint', style: { marginTop: '4px' } },
+          '当前：位置 (' + c.x + ', ' + c.y + ') · 大小 ' + c.width + '×'
+          + (c.height > 0 ? c.height : '自适应')),
       ])
     }
 
