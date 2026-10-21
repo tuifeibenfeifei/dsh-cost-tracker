@@ -1063,12 +1063,13 @@ window.__ModuleLoader__.load({
                 if (plat === 'workbuddy' || (lt.workbuddy && typeof lt.workbuddy.spent === 'number')) {
                   const spent = Number(lt.workbuddy && lt.workbuddy.spent)
                   let label
-                  if (Number.isFinite(spent) && spent > 0) label = pNum(spent) + ' 积分'
+                  // 与气泡同理：allFree 优先，免费轮不该说成「结算中/未入账」
+                  if (lt.allFree) label = '免费'
+                  else if (Number.isFinite(spent) && spent > 0) label = pNum(spent) + ' 积分'
                   else if (pending) label = reason === 'unconfirmed' ? '积分未入账' : '结算中…'
-                  else if (lt.allFree) label = '免费'
                   else label = '0 积分'
                   return kv('本轮 · WorkBuddy', label,
-                    spent > 0 ? 'warn' : (label === '免费' ? 'free' : ''))
+                    spent > 0 && !lt.allFree ? 'warn' : (label === '免费' ? 'free' : ''))
                 }
                 if (Number(lt.costTokenBased) > 0) {
                   return kv('本轮 · 阿里云', '¥' + pNum(lt.costTokenBased), 'warn')
@@ -1358,7 +1359,15 @@ window.__ModuleLoader__.load({
               const wb = lt.workbuddy || {}
               let text
               let kind = 'info'
-              if (wb.reason === 'unconfirmed' || wb.reason === 'zero-pending') {
+              // ⚠️ allFree 必须**优先**于 reason 判断。
+              // 实测（2026-10-22 23:12，hy4-preview 夜间免费轮）：
+              // 免费轮本来就该 spent=0，reason 于是落到 zero-pending，
+              // 若先判 reason 就会显示「本轮积分未入账」——把没花钱的
+              // 一轮说成账没算清，是误导。免费轮应直接说「本轮免费」。
+              if (lt.allFree) {
+                text = '本轮免费，未消耗积分'
+                kind = 'free'
+              } else if (wb.reason === 'unconfirmed' || wb.reason === 'zero-pending') {
                 text = '本轮积分未入账，稍后自动结算'
                 kind = 'pending'
               } else if (Number(wb.spent) > 0) {
@@ -1367,9 +1376,6 @@ window.__ModuleLoader__.load({
                   text += '（今天累计 ' + pNum(j.day.workbuddyCredits) + '）'
                 }
                 kind = 'spent'
-              } else if (lt.allFree) {
-                text = '本轮免费，未消耗积分'
-                kind = 'free'
               }
               if (text) toast = { key: 'turn-' + cur + '-' + Date.now(), text, kind }
             }
@@ -1809,12 +1815,10 @@ window.__ModuleLoader__.load({
         boxSizing: 'border-box',
         zIndex: 13500,
         display: 'flex',
-        // ⚠️ 必须从顶部开始排版（flex-start），不能 center。
-        // 固定高度下 align-items:center 会把多行文本垂直居中，
-        // 内容一旦超过高度就上下同时被裁，两头的信息都看不到。
-        // 从顶部起排 + 允许纵向滚动，才能「先看到开头，再滚着看全部」。
-        alignItems: 'flex-start',
-        gap: '6px',
+        // 纵向两行（与真实气泡一致：第1行消耗，第2行建议）
+        flexDirection: 'column',
+        alignItems: 'stretch',
+        justifyContent: 'flex-start',
         borderRadius: '12px',
         cursor: active ? 'grabbing' : 'grab',
         userSelect: 'none',
@@ -1824,6 +1828,9 @@ window.__ModuleLoader__.load({
         background: 'var(--dsw-alias-bg-layer-2,#1f2430)',
         border: '1px solid var(--dsw-alias-state-success-primary,#22a06b)',
         boxShadow: '0 6px 20px rgba(0,0,0,.28)',
+        // 预览文案用 \n 分行，需要 pre-line 才生效
+        whiteSpace: 'pre-line',
+        textAlign: 'left',
         // 内容超长时可滚（而不是裁掉）
         overflowY: 'auto',
         overflowX: 'hidden',
@@ -1874,7 +1881,8 @@ window.__ModuleLoader__.load({
           onPointerDown: startDrag('move'),
           title: '拖动移动位置',
         }, [
-          h('span', { key: 't', style: { flex: 1, minWidth: 0 } }, '🧾 本轮消耗 12 积分'),
+          h('span', { key: 't', style: { flex: 1, minWidth: 0 } },
+            '🧾 本轮消耗 12 积分\n💡 当前 X 消耗积分，Y 现在免费，切过去更省'),
           handle('nw', 'nwse-resize', { left: '-5px', top: '-5px' }),
           handle('ne', 'nesw-resize', { right: '-5px', top: '-5px' }),
           handle('sw', 'nesw-resize', { left: '-5px', bottom: '-5px' }),
