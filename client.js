@@ -1352,6 +1352,7 @@ window.__ModuleLoader__.load({
             //   · 别的会话完成一轮 → 本界面也弹气泡（误触发）
             //   · 同一会话连续两轮 turn 相同 → 不弹（漏触发）
             // 所以 key 取「sessionId:turn」，只有它变了才算新回合。
+            const key = lt ? (String(lt.sessionId || '') + ':' + cur) : ''
             // ⚠️ prevKey 必须保证是字符串，不能是 undefined。
             // 见下方 recommend 回调处对 noticeShared 兜底对象的说明：
             // 一旦 key 字段缺失，这里拿到 undefined 会让
@@ -1812,14 +1813,17 @@ window.__ModuleLoader__.load({
 
       // 预览外观与真实气泡保持一致（同一套圆角/底色/边框/阴影/字号规则），
       // 只在外面加一圈虚线定位框和四个抓手，这样「拖出来的样子 = 最终样子」。
+      // 字号规则必须与 toastStyle() 一致：以 pref.fontPx（数值）或宿主会话
+      // 字体为基准，而不是写死 12.5px —— 否则预览和真实气泡会不一致。
+      const baseFont = pref.fontPx > 0 ? pref.fontPx : readHostFontSize()
       const fit = pref.autoFit
         ? (() => {
-          const fs = Math.max(10, Math.min(24, Math.round(cur.width / 24)))
+          const fs = Math.min(32, Math.max(baseFont, Math.round(cur.width / 24)))
           const padX = Math.max(8, Math.min(24, Math.round(cur.width / 20)))
           const padY = Math.max(5, Math.min(18, Math.round(fs * 0.7)))
           return { fontSize: fs + 'px', padding: padY + 'px ' + padX + 'px', lineHeight: 1.45 }
         })()
-        : { fontSize: '12.5px', padding: '8px 12px', lineHeight: 1.45 }
+        : { fontSize: baseFont + 'px', padding: '8px 12px', lineHeight: 1.45 }
 
       const style = {
         position: 'fixed',
@@ -1922,6 +1926,7 @@ window.__ModuleLoader__.load({
       // 自定义模式：位置（px，距视口左上）与宽高（px）
       custom: { x: 280, y: 0, width: 300, height: 0 },
       autoFit: true,      // 字号随气泡尺寸自适应
+      fontPx: 0,          // 气泡字号（px）；0 = 跟随 DSH 会话字体
       editing: false,     // 是否常驻显示可拖动预览（用户手动开关）
       dockAdvice: false,  // 是否在输入框上方常驻一条建议（默认关：建议已并入气泡）
     }
@@ -1949,6 +1954,7 @@ window.__ModuleLoader__.load({
             if (typeof o.autoFit === 'boolean') v.autoFit = o.autoFit
             if (typeof o.editing === 'boolean') v.editing = o.editing
             if (typeof o.dockAdvice === 'boolean') v.dockAdvice = o.dockAdvice
+            if (Number(o.fontPx) > 0) v.fontPx = clampNum(o.fontPx, 8, 40, 0)
             if (o.custom && typeof o.custom === 'object') {
               // 越界值一律夹回合法区间：手改 localStorage 或旧版本数据都不能
               // 让气泡飞到屏幕外（那样用户会以为插件坏了，却无从恢复）
@@ -1974,6 +1980,41 @@ window.__ModuleLoader__.load({
       try { window.localStorage.setItem(TOAST_PREF_KEY, JSON.stringify(next)) } catch { /* 忽略 */ }
       toastPrefListeners.forEach((fn) => { try { fn(next) } catch { /* 忽略 */ } })
       return next
+    }
+
+    /** 读不到宿主字号令牌时的兜底（与 DSH 会话正文接近） */
+    const FONT_FALLBACK = 14
+
+    /**
+     * 读宿主会话正文字号，让气泡默认与对话字体一致。
+     *
+     * 为什么要读：用户反馈「字体太小」。气泡原先写死 12.5px，
+     * 而 DSH 会话正文用的是更大的字号，两者并排时气泡明显偏小。
+     * 宿主把字号放在主题令牌里（--dsw-alias-font-size），
+     * 通过一次探针元素读 computed style 拿到；读不到就用兜底 14px。
+     * 结果做缓存，避免每次渲染都操作 DOM。
+     */
+    let hostFontCache = 0
+    function readHostFontSize() {
+      if (hostFontCache) return hostFontCache
+      let v = 0
+      try {
+        if (typeof document !== 'undefined' && document.body) {
+          const probe = document.createElement('div')
+          probe.style.fontSize = 'var(--dsw-alias-font-size, 0px)'
+          probe.style.position = 'absolute'
+          probe.style.visibility = 'hidden'
+          probe.style.pointerEvents = 'none'
+          document.body.appendChild(probe)
+          const cs = window.getComputedStyle(probe)
+          const px = parseFloat(cs.fontSize)
+          if (Number.isFinite(px) && px >= 8 && px <= 40) v = Math.round(px)
+          try { probe.remove() } catch { /* 忽略 */ }
+        }
+      } catch { /* 读不到用兜底 */ }
+      if (!v) v = FONT_FALLBACK
+      hostFontCache = v
+      return v
     }
 
     /**
@@ -2009,13 +2050,17 @@ window.__ModuleLoader__.load({
         base.transform = 'translateX(-50%)'
       }
 
-      // 预设尺寸
+      // 预设尺寸（保留给不想调字号的人）
       const presets = {
-        small: { fontSize: 11.5, padding: '6px 10px', maxWidth: 220 },
-        normal: { fontSize: 12.5, padding: '8px 12px', maxWidth: 300 },
-        large: { fontSize: 14, padding: '12px 16px', maxWidth: 420 },
+        small: { padding: '6px 10px', maxWidth: 220 },
+        normal: { padding: '8px 12px', maxWidth: 300 },
+        large: { padding: '12px 16px', maxWidth: 420 },
       }
-      let fontSize = 12.5
+      // ⚠️ 默认字号跟 DSH 会话字体一致，不再写死 12.5px。
+      // 用户实测反馈「字体太小」：会话正文用的是更大的字号，气泡写死
+      // 12.5px 就显得突兀。这里读宿主主题令牌 --dsw-alias-font-size
+      // （读不到时兜底 14px），并允许用户用数值精确覆盖。
+      let fontSize = pref.fontPx > 0 ? pref.fontPx : readHostFontSize()
       let padding = '8px 12px'
       let width = null
       let height = null
@@ -2024,16 +2069,21 @@ window.__ModuleLoader__.load({
         width = custom.width
         height = custom.height > 0 ? custom.height : null
         if (pref.autoFit) {
-          // 字号随宽度线性缩放，夹在 10–24px，避免过大或看不清
-          fontSize = Math.max(10, Math.min(24, Math.round(width / 24)))
+          // 自动模式：字号随宽度缩放，但**以用户设定的 fontPx 为基准**
+          // （不再从固定的 12.5 起算），这样调大字号后拖宽气泡不会缩回去。
+          fontSize = Math.max(
+            Math.min(32, Math.round(pref.fontPx > 0 ? pref.fontPx : FONT_FALLBACK)),
+            Math.min(32, Math.round(width / 24)),
+          )
           // 内边距也按比例走，窄气泡不至于被 padding 吃光
           const padX = Math.max(8, Math.min(24, Math.round(width / 20)))
           const padY = Math.max(5, Math.min(18, Math.round(fontSize * 0.7)))
           padding = padY + 'px ' + padX + 'px'
         }
       } else {
+        // 预设只决定「内边距与最大宽度」，字号统一由
+        // pref.fontPx（用户数值）或宿主会话字体决定 —— 不再按档位写死。
         const s = presets[pref.size] || presets.normal
-        fontSize = s.fontSize
         padding = s.padding
         width = s.maxWidth
       }
@@ -2090,7 +2140,8 @@ window.__ModuleLoader__.load({
         ['top-center', '顶部居中'],
         ['custom', '自定义'],
       ]
-      const sizes = [['small', '小'], ['normal', '中'], ['large', '大'], ['custom', '自定义']]
+      // 尺寸档位（内边距/最大宽度）已由上面的数值输入与拖动预览取代，
+      // 字号统一由 pref.fontPx 数值控制，故不再渲染小/中/大选项。
       const durations = [[4000, '4 秒'], [6000, '6 秒'], [10000, '10 秒'], [0, '常驻']]
 
       const c = pref.custom
@@ -2102,9 +2153,27 @@ window.__ModuleLoader__.load({
         h('div', { key: 'pv' }, positions.map(([v, label]) =>
           chip(label, pref.position === v, () => writeToastPref({ position: v }), 'pos-' + v))),
 
-        h('div', { key: 's', className: 'dshctp-hint', style: { margin: '4px 0' } }, '尺寸'),
-        h('div', { key: 'sv' }, sizes.map(([v, label]) =>
-          chip(label, pref.size === v, () => writeToastPref({ size: v }), 'size-' + v))),
+        // ⚠️ 字号改用**数值输入**，不再用小/中/大选项。
+        // 用户要求：「不用什么选项选择字体，直接类似于 dsh 这样通过数值设置字体」。
+        // 默认 0 = 跟随 DSH 会话字体（readHostFontSize），填具体 px 则精确覆盖。
+        h('div', { key: 's', className: 'dshctp-hint', style: { margin: '6px 0 2px' } },
+          '气泡字号（px，0 = 跟随会话字体）'),
+        h('div', { key: 'sv', className: 'dshctp-numrow' }, [
+          h('label', { key: 'f', className: 'dshctp-num' }, [
+            h('span', { key: 'l' }, '字号'),
+            h('input', {
+              key: 'i',
+              type: 'number',
+              min: 0,
+              max: 40,
+              step: 1,
+              value: String(pref.fontPx || 0),
+              onChange: (e) => writeToastPref({ fontPx: clampNum(e.target.value, 0, 40, 0) }),
+            }),
+            h('span', { key: 'h', className: 'dshctp-hint' },
+              '当前实际 ' + (pref.fontPx > 0 ? pref.fontPx + 'px' : readHostFontSize() + 'px（跟随会话）')),
+          ]),
+        ]),
 
         // 拖动预览开关：预览是常驻浮层，切到对话也能看到，便于边看边调
         h('div', { key: 'drag', className: 'dshctp-custom' }, [
