@@ -1554,13 +1554,37 @@ window.__ModuleLoader__.load({
      * - 四个角各自有独立的向左/向右、向上/向下的缩放逻辑；
      *   拖左上角时 left 与 width 要反向联动（这是最容易写错的地方）。
      * - 所有结果都夹在视口内，绝不把气泡拖出屏幕外。
+     * - **10 秒无操作自动关闭**：预览是常驻浮层，浮久了会挡视线；
+     *   用户调完往往就忘了关。任何拖动/缩放都会重置这个计时，
+     *   所以「正在调」的时候绝不会被关掉。
      */
+    const PREVIEW_IDLE_MS = 10000
+
     function ToastDragPreview() {
       const [pref, setPref] = useState(() => readToastPref())
       // 拖动中的临时几何，松手才写回持久化
       const [geo, setGeo] = useState(null)
       const [active, setActive] = useState(false)
       const dragRef = useRef(null)
+      // 空闲计时器：每次交互重置
+      const idleRef = useRef(null)
+
+      /** 重置空闲计时；到点自动关掉预览（写 editing=false） */
+      const bumpIdle = useCallback(() => {
+        if (idleRef.current) { clearTimeout(idleRef.current); idleRef.current = null }
+        idleRef.current = setTimeout(() => {
+          idleRef.current = null
+          writeToastPref({ editing: false })
+        }, PREVIEW_IDLE_MS)
+      }, [])
+
+      // 挂载即开始计时；卸载时清掉，避免定时器泄漏
+      useEffect(() => {
+        bumpIdle()
+        return () => {
+          if (idleRef.current) { clearTimeout(idleRef.current); idleRef.current = null }
+        }
+      }, [bumpIdle])
 
       useEffect(() => {
         const fn = (next) => setPref({ ...next, custom: { ...next.custom } })
@@ -1581,6 +1605,8 @@ window.__ModuleLoader__.load({
           ev.preventDefault()
           ev.stopPropagation()
         } catch { /* 忽略 */ }
+        // 一开始拖就重置空闲计时：用户正在操作，绝不能被自动关闭
+        bumpIdle()
         const begin = { ...cur }
         const startX = ev.clientX
         const startY = ev.clientY
@@ -1590,6 +1616,8 @@ window.__ModuleLoader__.load({
         const onMove = (e) => {
           const d = dragRef.current
           if (!d) return
+          // 拖动过程中每次移动都续期：手一直动着就不该被关
+          bumpIdle()
           const dx = e.clientX - d.startX
           const dy = e.clientY - d.startY
           const b = d.begin
@@ -1646,6 +1674,8 @@ window.__ModuleLoader__.load({
             }
             return null
           })
+          // 松手后重新开始计时：给用户 10 秒决定「继续调」还是「就这样」
+          bumpIdle()
           void d
         }
 
@@ -1951,7 +1981,9 @@ window.__ModuleLoader__.load({
           h('div', { key: 'hint', className: 'dshctp-hint', style: { marginTop: '2px', opacity: 0.8 } },
             pref.editing
               ? '预览气泡已浮在页面上，切到对话界面它也还在——边看对话边拖，位置才准。'
-              : '开启后预览气泡会浮在整个页面上（不只在费用面板），切到对话也能看到。'),
+              + '10 秒无操作会自动关闭（拖动时会重新计时）。'
+              : '开启后预览气泡会浮在整个页面上（不只在费用面板），切到对话也能看到；'
+              + '10 秒无操作自动关闭。'),
         ]),
 
         // 自适应字号
