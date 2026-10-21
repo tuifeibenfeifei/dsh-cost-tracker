@@ -864,9 +864,11 @@ window.__ModuleLoader__.load({
       '  border:1px solid var(--dsw-alias-state-success-primary,rgba(34,160,107,.3))}',
       // 帧级气泡：位置/尺寸由 toastStyle() 以**内联样式**下发（用户可配），
       // 这里只留与位置无关的外观，避免两处 left/top 打架。
-      '.dshctn-float{display:inline-flex;align-items:center;gap:6px;',
+      // align-items 用 flex-start：多行文本从顶部起排，内容超高时可滚，
+      // 不会像 center 那样上下同时被裁。
+      '.dshctn-float{display:inline-flex;align-items:flex-start;gap:6px;',
       '  border-radius:12px;line-height:1.45;font-weight:600;',
-      '  white-space:normal;word-break:break-word;',
+      '  white-space:normal;word-break:break-word;text-align:left;',
       '  box-shadow:0 6px 20px rgba(0,0,0,.22);',
       '  color:var(--dsw-alias-text-primary,inherit);',
       '  background:var(--dsw-alias-bg-layer-2,#1f2430);',
@@ -1777,7 +1779,11 @@ window.__ModuleLoader__.load({
         boxSizing: 'border-box',
         zIndex: 13500,
         display: 'flex',
-        alignItems: 'center',
+        // ⚠️ 必须从顶部开始排版（flex-start），不能 center。
+        // 固定高度下 align-items:center 会把多行文本垂直居中，
+        // 内容一旦超过高度就上下同时被裁，两头的信息都看不到。
+        // 从顶部起排 + 允许纵向滚动，才能「先看到开头，再滚着看全部」。
+        alignItems: 'flex-start',
         gap: '6px',
         borderRadius: '12px',
         cursor: active ? 'grabbing' : 'grab',
@@ -1788,7 +1794,9 @@ window.__ModuleLoader__.load({
         background: 'var(--dsw-alias-bg-layer-2,#1f2430)',
         border: '1px solid var(--dsw-alias-state-success-primary,#22a06b)',
         boxShadow: '0 6px 20px rgba(0,0,0,.28)',
-        overflow: 'hidden',
+        // 内容超长时可滚（而不是裁掉）
+        overflowY: 'auto',
+        overflowX: 'hidden',
         ...fit,
       }
 
@@ -1985,9 +1993,13 @@ window.__ModuleLoader__.load({
       }
       if (height) {
         out.height = height + 'px'
-        // 高度固定时让内容纵向居中，文字多了就滚动，不会被裁得莫名
+        // ⚠️ 从顶部排版（flex-start），不要 center。
+        // 固定高度下 center 会把多行文本垂直居中，一旦内容超高就上下同时
+        // 被裁——用户抱怨「信息不全」正是这个原因。顶部起排 + 可滚动，
+        // 才能先看到开头再滚着看完。
         out.overflowY = 'auto'
-        out.alignItems = 'center'
+        out.overflowX = 'hidden'
+        out.alignItems = 'flex-start'
       }
       // 自定义高度足够高时允许换行（否则一行省略很浪费空间）
       if (height && height >= fontSize * 2.6) {
