@@ -1190,37 +1190,60 @@ window.__ModuleLoader__.load({
      */
     const PANEL_ID = 'dsh-cost-tracker'
     function registerSidebarEntry(ctx, namespace) {
-      let layoutRef = null
-      const offPanel = ctx.slots.register({
-        name: 'main',
-        key: PANEL_ID,
-        locale: namespace,
-      }, CostTrackerPanel)
-      let offRow = null
-      try {
-        offRow = ctx.slots.register({
-          name: 'sidebar.panellist',
-          id: PANEL_ID,
-          order: 90,
-          label: '费用',
-          locale: namespace,
-        }, CostTrackerNavIcon)
-      } catch (e) {
-        try { console.error('[dsh-cost-tracker] sidebar.panellist unavailable:', e) } catch { /* 忽略 */ }
-      }
-      try {
-        ctx.inject(['layout'], (scoped) => { layoutRef = scoped && scoped.layout ? scoped.layout : null })
-      } catch { /* 宿主无 layout 服务时忽略 */ }
-      return () => {
-        try {
-          if (layoutRef && layoutRef.panelInfo
-            && layoutRef.panelInfo.getSnapshot().activePanelId === PANEL_ID) {
-            layoutRef.selectPanel(null)
+      // ⚠️ 必须等 slot 就绪再注册。
+      //
+      // 踩过的坑（2026-10-21）：裸调用 ctx.slots.register({name:'sidebar.panellist'})
+      // 看起来成功（返回了 disposer），但实测 inspect 的 occupants 里**没有**本插件——
+      // slot 在 apply 早期尚未建立，注册被静默丢弃，钱袋图标就「消失」了。
+      // dshmarket 的等价做法是 gate 延迟注册（client.js L15978 sidebarGate），
+      // 本质一样：等宿主把 slot 立起来，再往里注册。
+      // ctx.slots.inject(key, cb) 的回调正是在该 slot 可用时执行，故用它包裹。
+      return ctx.effect(() => {
+        let offPanel = null
+        let offRow = null
+        let layoutRef = null
+
+        const offInject = ctx.slots.inject('sidebar.panellist', () => {
+          // 两个注册各自独立 try：任一失败都不能连累另一个，
+          // 更不能冒泡到 applyInner 把模型标签一起废掉。
+          try {
+            offPanel = ctx.slots.register({
+              name: 'main',
+              key: PANEL_ID,
+              locale: namespace,
+            }, CostTrackerPanel)
+          } catch (e) {
+            try { console.error('[dsh-cost-tracker] main panel register failed:', e) } catch { /* 忽略 */ }
           }
-        } catch { /* 忽略 */ }
-        if (typeof offRow === 'function') { try { offRow() } catch { /* 忽略 */ } }
-        if (typeof offPanel === 'function') { try { offPanel() } catch { /* 忽略 */ } }
-      }
+          try {
+            offRow = ctx.slots.register({
+              name: 'sidebar.panellist',
+              id: PANEL_ID,
+              order: 90,
+              label: '费用',
+              locale: namespace,
+            }, CostTrackerNavIcon)
+          } catch (e) {
+            try { console.error('[dsh-cost-tracker] sidebar.panellist register failed:', e) } catch { /* 忽略 */ }
+          }
+        })
+
+        try {
+          ctx.inject(['layout'], (scoped) => { layoutRef = scoped && scoped.layout ? scoped.layout : null })
+        } catch { /* 宿主无 layout 服务时忽略 */ }
+
+        return () => {
+          try {
+            if (layoutRef && layoutRef.panelInfo
+              && layoutRef.panelInfo.getSnapshot().activePanelId === PANEL_ID) {
+              layoutRef.selectPanel(null)
+            }
+          } catch { /* 忽略 */ }
+          if (typeof offRow === 'function') { try { offRow() } catch { /* 忽略 */ } }
+          if (typeof offPanel === 'function') { try { offPanel() } catch { /* 忽略 */ } }
+          if (typeof offInject === 'function') { try { offInject() } catch { /* 忽略 */ } }
+        }
+      }, 'cost-tracker: sidebar entry')
     }
 
     /** 侧栏行的图标：宿主给 16px 格子，传 owner.size */
