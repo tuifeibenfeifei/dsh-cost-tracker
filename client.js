@@ -150,6 +150,18 @@ window.__ModuleLoader__.load({
               contextWindow: typeof m.contextWindow === 'number' ? m.contextWindow : null,
             }
           }
+          // ⚠️ ranked 为空时回退到 modelCatalog。
+          // ranked 依赖 credits.snapshot().models，而 WorkBuddy 登录态抖动、
+          // 采样失败时它会是空数组 —— 那会让所有模型的「免费/常用」标签
+          // 一起消失（用户 2026-10-21 报的「图标没了」就是这个）。
+          // modelCatalog 用的是同一份数据但更宽松，至少能保住模型 id 清单，
+          // 让 buildTags 的档位兜底逻辑还能跑。
+          if (!ranked.length && json && Array.isArray(json.modelCatalog)) {
+            for (const m of json.modelCatalog) {
+              if (!m || !m.id) continue
+              if (!map[m.id]) map[m.id] = { free: false, credits: '', badges: [], contextWindow: null, fallback: true }
+            }
+          }
           badgeCache = map
           badgeFetchedAt = Date.now()
           return map
@@ -797,8 +809,11 @@ window.__ModuleLoader__.load({
       '.dshctp-saved{font-size:11px;color:var(--dsw-alias-state-success-primary,#22a06b)}',
       // —— 主动提示（常驻条 + 帧级气泡）——
       // 常驻条位于 conversation.input.dock（输入框上方），用宿主令牌配色
-      '.dshctn-dock{display:flex;flex-direction:column;gap:4px;padding:2px 0}',
-      '.dshctn-tip{padding:6px 10px;border-radius:8px;font-size:12px;line-height:1.5;',
+      '.dshctn-dock{display:flex;flex-direction:column;gap:4px;padding:2px 0;',
+      '  align-items:flex-start}',
+      '.dshctn-tip{display:inline-block;max-width:100%;box-sizing:border-box;',
+      '  padding:5px 10px;border-radius:8px;font-size:12px;line-height:1.45;',
+      '  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;',
       '  color:var(--dsw-alias-text-primary,inherit)}',
       '.dshctn-tip.warn{background:var(--dsw-alias-state-warning-primary,rgba(251,191,36,.12));',
       '  border:1px solid var(--dsw-alias-state-warning-primary,rgba(251,191,36,.35))}',
@@ -806,13 +821,18 @@ window.__ModuleLoader__.load({
       '  border:1px solid var(--dsw-alias-state-error-primary,rgba(217,45,32,.32))}',
       '.dshctn-tip.ok{background:var(--dsw-alias-state-success-primary,rgba(34,160,107,.1));',
       '  border:1px solid var(--dsw-alias-state-success-primary,rgba(34,160,107,.3))}',
-      // 帧级气泡：shell.overlay 里由宿主负责层级，这里只做外观与定位
-      '.dshctn-float{position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:14000;',
-      '  max-width:min(520px,90vw);padding:8px 14px;border-radius:10px;font-size:13px;',
-      '  line-height:1.5;font-weight:600;box-shadow:0 8px 28px rgba(0,0,0,.28);',
+      // 帧级气泡：紧凑的 pill，靠右上，不整行铺开
+      '.dshctn-float{position:fixed;top:16px;right:20px;z-index:14000;',
+      '  display:inline-flex;align-items:center;gap:6px;',
+      '  max-width:min(420px,80vw);padding:8px 14px;border-radius:999px;',
+      '  font-size:12.5px;line-height:1.4;font-weight:600;white-space:nowrap;',
+      '  overflow:hidden;text-overflow:ellipsis;',
+      '  box-shadow:0 6px 20px rgba(0,0,0,.22);',
       '  color:var(--dsw-alias-text-primary,inherit);',
       '  background:var(--dsw-alias-bg-layer-2,#1f2430);',
-      '  border:1px solid var(--dsw-alias-border-primary,rgba(127,127,127,.3))}',
+      '  border:1px solid var(--dsw-alias-border-primary,rgba(127,127,127,.3));',
+      '  animation:dshctn-in .18s ease-out}',
+      '@keyframes dshctn-in{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}',
       '.dshctn-float.spend{border-color:var(--dsw-alias-state-warning-primary,rgba(251,191,36,.6))}',
       '.dshctn-float.free{border-color:var(--dsw-alias-state-success-primary,rgba(34,160,107,.6))}',
       '.dshctn-float.pending{border-color:var(--dsw-alias-state-error-primary,rgba(217,45,32,.5))}',
@@ -1266,6 +1286,8 @@ window.__ModuleLoader__.load({
 
       ctx.effect(() => {
         let alive = true
+        // 指纹：只有它变化才通知订阅者，避免无意义重渲染导致闪烁
+        let lastFingerprint = ''
         const poll = () => {
           if (!alive) return
           pFetch('/cost-tracker/ledger').then((j) => {
@@ -1300,19 +1322,32 @@ window.__ModuleLoader__.load({
               }
               if (text) toast = { key: 'turn-' + cur + '-' + Date.now(), text, kind }
             }
-            noticeShared = { ledger: j, lastTurn: cur, key, toast }
+            noticeShared = { ledger: j, lastTurn: cur, key, toast: toast || (noticeShared ? noticeShared.toast : null) }
             // 诊断：把最近一次 poll 的结果挂上去，便于在控制台核对气泡是否触发
             diag.lastTurn = cur
             diag.lastSession = lt ? String(lt.sessionId || '') : ''
             diag.toast = toast ? (toast.kind + ': ' + toast.text) : null
-            noticeListeners.forEach((fn) => fn())
+            // ⚠️ 只在真有变化时通知订阅者。
+            // 以前每 8 秒 poll 都无条件 notifyListeners()，即使数据完全没变，
+            // 也会让常驻条/气泡重渲染一次 —— 用户看到的就是「时不时一闪一闪」。
+            // 用 key + toast.key 做指纹，指纹不变就不通知。
+            const fp = key + '|' + (toast ? toast.key : '')
+            if (fp !== lastFingerprint) {
+              lastFingerprint = fp
+              noticeListeners.forEach((fn) => fn())
+            }
           }).catch(() => {})
           pFetch('/cost-tracker/recommend').then((j) => {
             if (!alive || !j || !j.advice) return
             if (!noticeShared) noticeShared = { ledger: null, lastTurn: 0, toast: null }
+            const prevLevel = noticeShared.advice ? noticeShared.advice.level : ''
+            const prevMsg = noticeShared.advice ? noticeShared.advice.message : ''
             noticeShared.advice = j.advice
             diag.adviceLevel = j.advice.level
-            noticeListeners.forEach((fn) => fn())
+            // 同样只在建议真的变了才通知，避免每 8 秒闪一次
+            if (j.advice.level !== prevLevel || j.advice.message !== prevMsg) {
+              noticeListeners.forEach((fn) => fn())
+            }
           }).catch(() => {})
         }
         poll()
