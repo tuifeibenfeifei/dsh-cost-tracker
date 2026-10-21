@@ -205,10 +205,11 @@
     // 拖拽手柄：右下角自由调宽
     card.appendChild(el('div', 'dshcw-resize'))
     root.appendChild(card)
-    // 挂进左侧侧栏内部（用户要求），不再用 fixed 浮层锚定账户行。
-    mountIntoSidebar()
-    // 非常驻时默认折叠（标题栏仍在侧栏里），点标题再展开
-    if (!settings.alwaysShow) root.style.display = 'none'
+    // 固定浮层：💰 按钮常驻左下角，点击展开/收起面板（面板 fixed 定位，
+    // 不碰 DSH 的 React 节点，避免白屏 / 被重渲染移除）。
+    mountFloating()
+    // 默认折叠（仅标题所在面板隐藏），点 💰 或标题展开
+    root.style.display = 'none'
 
     applyCardWidth()
     enableResize()
@@ -217,17 +218,16 @@
       toggle: function () {
         var show = root.style.display === 'none'
         root.style.display = show ? 'block' : 'none'
-        if (show) { root.dataset.collapsed = '0'; tick() }
-        else root.dataset.collapsed = '1'
+        if (show) { positionPanel(); tick() }
       },
       close: hidePanel,
-      open: function () { root.style.display = 'block'; root.dataset.collapsed = '0'; tick() },
+      open: function () { root.style.display = 'block'; positionPanel(); tick() },
     }
-    mountFallbackButton()
+    mountFloatingButton()
     // 常驻显示：面板一直开着
     if (settings.alwaysShow) {
       root.style.display = 'block'
-      root.dataset.collapsed = '0'
+      positionPanel()
       tick()
     }
     return body
@@ -264,138 +264,58 @@
   }
 
   /**
-   * 把面板挂进左侧侧栏容器内部（用户要求，最稳）。
-   *
-   * 做法：找到左侧栏的可滚动容器（最左边、贴边、竖向滚动列），
-   * 把面板作为该容器的**最后一个子节点** append 进去。
-   * 面板自身用 `data-dsh-cost` 标记，配合 MutationObserver 自愈：
-   * React 重渲染清掉它时，下一帧自动挂回。
-   *
-   * 不再自建 fixed 💰 浮层入口——面板直接出现在侧栏里，点标题即可折叠/展开，
-   * 彻底消除「找不到账户行就消失」的问题。
+   * 固定浮层方案（最稳、与 DSH React 节点零耦合）：
+   *  - 💰 按钮常驻左下角（z-index 高、不会被任何重渲染移除）；
+   *  - 面板为 position:fixed，锚定按钮上方，不 append 进任何 React 容器，
+   *    因此不会被宿主重渲染清掉，也不会导致白屏。
+   *  - 常驻模式（设置里开）则面板直接常开，💰 按钮不再需要。
    */
-  /**
-   * 兜底入口：只有当面板没挂进侧栏（极端情况，如侧栏结构识别失败）时，
-   * 才在左下角显示一个 fixed 💰 按钮，点它把面板挂回侧栏并展开。
-   * 正常情况下面板已经在侧栏里，这个按钮保持隐藏，绝不喧宾夺主。
-   */
-  function mountFallbackButton() {
+  function mountFloating() {
+    if (!root) return
+    root.setAttribute('data-dsh-cost', '1')
+    root.style.position = 'fixed'
+    root.style.zIndex = '12000'
+    root.style.width = Math.min(settings.cardWidth, (window.innerWidth || 1200) - 16) + 'px'
+    // display 由调用方统一管理（默认 none，常驻时 block）
+  }
+
+  /** 常驻左下角的 💰 入口按钮（始终可见，除非面板已常开） */
+  function mountFloatingButton() {
     if (sidebarBtn && sidebarBtn.parentNode) {
       try { sidebarBtn.parentNode.removeChild(sidebarBtn) } catch (e) {}
     }
     var btn = document.createElement('button')
     sidebarBtn = btn
     btn.textContent = '💰'
-    btn.title = '费用（点击在侧栏中打开面板）'
-    btn.style.cssText = 'position:fixed;z-index:12005;left:8px;bottom:8px;width:30px;height:30px;' +
-      'display:none;align-items:center;justify-content:center;' +
+    btn.title = '费用追踪（点击展开）'
+    btn.style.cssText = 'position:fixed;z-index:12005;left:8px;bottom:8px;width:32px;height:32px;' +
+      'display:' + (settings.alwaysShow ? 'none' : 'flex') + ';align-items:center;justify-content:center;' +
       'background:rgba(31,41,55,.95);border:1px solid rgba(255,255,255,.2);border-radius:8px;' +
-      'cursor:pointer;font-size:15px;color:#fff;box-shadow:0 4px 14px rgba(0,0,0,.4)'
+      'cursor:pointer;font-size:16px;color:#fff;box-shadow:0 4px 14px rgba(0,0,0,.45)'
     btn.addEventListener('click', function () {
-      mountIntoSidebar()
-      if (window.__dshCostPanel) window.__dshCostPanel.open()
+      if (window.__dshCostPanel) window.__dshCostPanel.toggle()
     })
     ;(document.body || document.documentElement).appendChild(btn)
-    // 初始：若面板已在侧栏则隐藏按钮
-    var host = findSidebarContainer()
-    btn.style.display = (host && root && root.parentNode === host) ? 'none' : 'flex'
   }
 
-  function findSidebarContainer() {
-    try {
-      var cands = document.querySelectorAll('nav, aside, [role="navigation"]')
-      var best = null
-      var bestLeft = 9999
-      for (var i = 0; i < cands.length; i++) {
-        var elx = cands[i]
-        var r = elx.getBoundingClientRect()
-        if (r.width === 0 || r.height === 0) continue
-        if (r.left < 0 || r.left >= 80) continue         // 左侧栏：左边缘贴屏幕左边
-        if (r.width > (window.innerWidth || 1200) * 0.5) continue // 排除主区/右侧栏
-        if (r.left < bestLeft) { bestLeft = r.left; best = elx }
-      }
-      // 兜底：直接找最靠左的、能滚动的块
-      if (!best) {
-        var all = document.querySelectorAll('div')
-        for (var j = 0; j < all.length; j++) {
-          var d = all[j]
-          var rr = d.getBoundingClientRect()
-          if (rr.width === 0 || rr.height === 0) continue
-          if (rr.left < 0 || rr.left >= 80) continue
-          if (rr.width > (window.innerWidth || 1200) * 0.5) continue
-          if (d.scrollHeight > d.clientHeight + 50) {  // 有竖向滚动条的典型侧栏
-            if (rr.left < bestLeft) { bestLeft = rr.left; best = d }
-          }
-        }
-      }
-      return best
-    } catch (e) { return null }
-  }
-
-  var sidebarReattachObs = null
-  function mountIntoSidebar() {
+  /** 面板定位：贴左下角 💰 按钮上方，钳制在视口内 */
+  function positionPanel() {
     if (!root) return
-    root.setAttribute('data-dsh-cost', '1')
-    root.style.position = 'static'   // 放进侧栏内部，不再 fixed
-    root.style.width = '100%'
-    root.style.margin = '8px 0 0'
-    root.style.display = (settings.alwaysShow || root.dataset.collapsed !== '1') ? 'block' : 'none'
-
-    var host = findSidebarContainer()
-    if (!host) {
-      // 极端兜底：挂到 body，但保持 visible，绝不消失
-      ;(document.body || document.documentElement).appendChild(root)
-      return
-    }
-    // 已经是子节点则跳过
-    if (root.parentNode === host) return
-    // 清掉容器内旧的本插件残留（避免堆叠），再挂到末尾
-    var stale = host.querySelectorAll('[data-dsh-cost]')
-    for (var i = 0; i < stale.length; i++) {
-      if (stale[i] !== root && stale[i].parentNode) {
-        try { stale[i].parentNode.removeChild(stale[i]) } catch (e) {}
-      }
-    }
-    host.appendChild(root)
-
-    // MutationObserver 自愈：React 重渲染移除了面板，下一帧挂回
-    if (sidebarReattachObs) { try { sidebarReattachObs.disconnect() } catch (e) {} }
-    sidebarReattachObs = new MutationObserver(function () {
-      try {
-        if (!root) return
-        if (!root.parentNode || root.parentNode !== host) {
-          if (findSidebarContainer() === host) host.appendChild(root)
-        }
-      } catch (e) {}
-    })
-    try { sidebarReattachObs.observe(host, { childList: true }) } catch (e) {}
+    var w = root.offsetWidth || settings.cardWidth
+    var h = root.offsetHeight || 300
+    var vw = window.innerWidth || 1200
+    var vh = window.innerHeight || 800
+    var left = Math.max(8, vw - w - 12)
+    var top = Math.max(8, vh - h - 48)   // 给 💰 按钮留 48px
+    root.style.left = left + 'px'
+    root.style.top = top + 'px'
+    root.style.bottom = 'auto'
+    root.style.right = 'auto'
   }
 
   function hidePanel() {
-    if (root) { root.style.display = 'none'; root.dataset.collapsed = '1' }
+    if (root) root.style.display = 'none'
   }
-
-  /** 面板定位：在侧栏模式下只是「确保挂回侧栏容器」；不再做 fixed 定位 */
-  function positionPanel() {
-    if (!root) return
-    root.style.position = 'static'
-    root.style.width = '100%'
-    var host = findSidebarContainer()
-    if (host && root.parentNode !== host) {
-      // 清掉容器内旧的本插件残留
-      var stale = host.querySelectorAll('[data-dsh-cost]')
-      for (var i = 0; i < stale.length; i++) {
-        if (stale[i] !== root && stale[i].parentNode) {
-          try { stale[i].parentNode.removeChild(stale[i]) } catch (e) {}
-        }
-      }
-      host.appendChild(root)
-    } else if (!host && root.parentNode !== (document.body || document.documentElement)) {
-      ;(document.body || document.documentElement).appendChild(root)
-    }
-  }
-
-  // （拖动逻辑已随悬浮模式移除）
 
   // ---------- 渲染 ----------
   function row(label, value, dotColor, valClass) {
@@ -903,43 +823,27 @@
           start()
           return
         }
-        // 2) 面板不在侧栏内部 -> 挂回侧栏（React 重渲染把它挪走时自愈）
-        var sidebar = findSidebarContainer()
-        if (sidebar && root.parentNode !== sidebar) {
-          mountIntoSidebar()
-        } else if (!sidebar && root.parentNode !== host) {
-          ;(document.body || document.documentElement).appendChild(root)
+        // 2) 💰 入口按钮丢失 -> 补一个（常驻模式才隐藏）
+        if (sidebarBtn && !sidebarBtn.parentNode) {
+          mountFloatingButton()
+        } else if (sidebarBtn && settings.alwaysShow) {
+          sidebarBtn.style.display = 'none'
         }
-        // 3) 兜底按钮：仅在面板没进侧栏时显示
-        if (sidebarBtn) {
-          sidebarBtn.style.display = (sidebar && root.parentNode === sidebar) ? 'none' : 'flex'
-        }
-        // 4) 常驻模式下面板被意外收起 -> 重新显示
+        // 3) 常驻模式下面板被意外收起 -> 重新显示
         if (settings.alwaysShow && root.style.display === 'none') {
           root.style.display = 'block'
-          root.dataset.collapsed = '0'
+          positionPanel()
         }
       } catch (e) {}
     }, 3000)
   }
 
   function boot() {
-    // 优先走 Better Sidebar 标签页（由 client.js 注册）。
-    // 若已注册（或稍后注册）则不启动浮层，避免两个入口并存。
-    if (window.__dshCostTabRegistered) return
-    var waited = 0
-    var poll = setInterval(function () {
-      waited += 300
-      if (window.__dshCostTabRegistered) {
-        clearInterval(poll)
-        return
-      }
-      if (waited >= 6000) {
-        clearInterval(poll)
-        start()           // 回退：未装 better-sidebar，启动浮层入口
-        startWatchdog()
-      }
-    }, 300)
+    // 浮层入口始终启动（最稳，与标签页方案互不冲突）；
+    // 若 Better Sidebar 标签页已注册，用户可在 Better Sidebar 里用标签页，
+    // 也可保留左下角 💰 浮层——两者并存无碍。
+    start()
+    startWatchdog()
   }
 
   if (document.body) boot()

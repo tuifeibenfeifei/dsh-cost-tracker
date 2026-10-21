@@ -578,7 +578,7 @@ window.__ModuleLoader__.load({
       }, nodes)
     }
 
-    const inject = ['slots', 'locale']
+    const inject = ['slots', 'locale', 'betterSidebar']
 
     /**
      * 插件入口。
@@ -765,21 +765,19 @@ window.__ModuleLoader__.load({
       }, 'cost-tracker: model label')
 
       // ---- 注册到 Better Sidebar 的标签页（与文件/任务等并列，点开右侧显示）----
-      // 用 ctx.inject 动态可选注入：未装 better-sidebar 时自动跳过，不影响模型标签功能；
-      // 装了则由 widget.js 浮层兜底的回退路径自动让位给标签页。
+      // 顶层 inject 已声明 betterSidebar，此处服务必然就绪，直接同步注册。
+      // 若 better-sidebar 未启用，整个 client half 不会激活（已在 inject 里声明依赖），
+      // 此时由 widget.js 浮层（等待 6s 未检测到注册标记）兜底。
       try {
-        ctx.inject(['betterSidebar'], (betterSidebar) => {
-          if (!betterSidebar || typeof betterSidebar.registerTab !== 'function') return
-          const dispose = betterSidebar.registerTab({
-            id: 'cost-tracker:panel',
-            title: '费用',
-            component: CostTrackerPanel,
-          })
-          window.__dshCostTabRegistered = true
-          return () => { try { dispose && dispose() } catch { /* 忽略 */ } }
+        const dispose = ctx.betterSidebar.registerTab({
+          id: 'cost-tracker:panel',
+          title: '费用',
+          component: CostTrackerPanel,
         })
+        window.__dshCostTabRegistered = true
+        ctx.effect(() => { try { dispose && dispose() } catch { /* 忽略 */ } }, 'cost-tracker: better-sidebar tab')
       } catch (e) {
-        try { console.error('[dsh-cost-tracker] betterSidebar inject failed:', e) } catch { /* 忽略 */ }
+        try { console.error('[dsh-cost-tracker] registerTab failed:', e) } catch { /* 忽略 */ }
       }
     }
 
