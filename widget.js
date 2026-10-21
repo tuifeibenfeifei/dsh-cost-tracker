@@ -486,6 +486,18 @@
       // 注：阿里云不进记账——token 推算偏差 26.6 倍，无可信金额
     }
 
+    // ===== 结算异常提示（最重要，放在记账区正上方）=====
+    // 以前 unconfirmed / zero-pending 只躺在状态文件里，面板一字不提，
+    // 用户看到的就是「莫名就不能用了，还没报错」。这里把实话说出来。
+    if (ledger && ledger.settlement && ledger.settlement.unsettled > 0) {
+      var st = ledger.settlement
+      var last = st.reasons && st.reasons.length ? st.reasons[st.reasons.length - 1] : null
+      var msg = '⚠ 最近 ' + st.recent + ' 轮里有 ' + st.unsettled + ' 轮积分未结清'
+        + (last ? '（' + (last.model || '?') + '）' : '')
+        + '：该轮消耗未确认，累计积分可能偏低'
+      body.appendChild(el('div', 'dshcw-tip', msg))
+    }
+
     // 主动省钱建议（最重要，放最上面显眼位置）
     if (reco && reco.advice && reco.advice.message) {
       var adv = reco.advice

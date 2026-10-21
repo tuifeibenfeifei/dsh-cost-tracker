@@ -84,7 +84,7 @@ window.__ModuleLoader__.load({
     let badgeInFlight = null
     const REFRESH_MS = 30000
 
-    /** 限流/限额状态缓存：modelId -> { rateLimited, rateLimitedUntil, contextOverflowAt } */
+    /** 限流/限额状态缓存：modelId -> { rateLimited, rateLimitedUntil, quotaExhaustedAt, creditExhaustedAt, ... } */
     let limitCache = null
     let limitFetchedAt = 0
     let limitInFlight = null
@@ -112,7 +112,9 @@ window.__ModuleLoader__.load({
               rateLimitedUntil: typeof m.rateLimitedUntil === 'number' ? m.rateLimitedUntil : null,
               rateLimitedApprox: m.rateLimitedApprox === true,
               quotaExhaustedAt: typeof m.quotaExhaustedAt === 'number' ? m.quotaExhaustedAt : null,
+              creditExhaustedAt: typeof m.creditExhaustedAt === 'number' ? m.creditExhaustedAt : null,
               contextOverflowAt: typeof m.contextOverflowAt === 'number' ? m.contextOverflowAt : null,
+              note: typeof m.note === 'string' ? m.note : '',
             }
           }
           limitCache = map
@@ -302,6 +304,11 @@ window.__ModuleLoader__.load({
         }
       }
       // ===== 可用状态 =====
+      // ⚠️ 历史教训（2026-10-21）：这里原来只认「rateLimitedUntil 还没到」，
+      // 于是手动标记 12 小时过期后，hy3 / step-5-preview 的「额度已用尽」
+      // 提示**整条消失**——用户看到的就是「莫名就用完了，还没任何提示」。
+      // 现在改成：quotaExhaustedAt / creditExhaustedAt 一经记录就长期展示，
+      // 与「还有多久恢复」解耦；恢复时间只作为附加信息。
       const lim = (limitCache && limitCache[modelId]) || {}
       const now = Date.now()
       const until = lim.rateLimitedUntil
@@ -313,9 +320,14 @@ window.__ModuleLoader__.load({
         const approx = lim.rateLimitedApprox ? '（估算）' : ''
         lines.push('⛔ ' + label + '：' + fmtUntil(until) + ' 恢复' + approx
           + '，还剩 ' + fmtLeftMs(left))
-      } else if (lim.quotaExhaustedAt && meta.free) {
-        // 记过额度用尽但没拿到恢复时间
-        lines.push('⛔ 额度已用尽，等待每日重置后才能再用')
+      } else if (lim.quotaExhaustedAt || lim.creditExhaustedAt) {
+        // 恢复时间已过 / 从未给过：额度用尽的事实仍然有效。
+        // 免费模型要等次日重置；积分不足型是钱的问题，要充值或换模型。
+        if (lim.creditExhaustedAt) {
+          lines.push('⛔ 积分/余额不足：请求已被上游拒绝，需充值或改用其他模型')
+        } else {
+          lines.push('⛔ 免费额度已用尽，等待每日重置后才能再用')
+        }
       } else if (lim.rateLimited && left !== null && left <= 0) {
         lines.push('✅ 限流已结束，可正常使用')
       }
@@ -539,14 +551,39 @@ window.__ModuleLoader__.load({
 
       const lines = buildHoverLines(modelId, meta)
 
-      // 限流标记：不经悬停也能一眼看到「这个模型现在不能用」
+      // 限流/额度用尽标记：**不经悬停也能一眼看到「这个模型现在不能用」**
+      // 与悬停说明同理：quotaExhaustedAt 一旦记录就长期有效，不因恢复时间过期而消失。
+      // 积分不足（402）单独一个红色「欠费」标记，和「每日额度用尽」区分开——
+      // 前者要充值，后者等次日，处理方式完全不同。
       const limNow = (limitCache && limitCache[modelId]) || {}
       const limitedNow = !!(limNow.rateLimited && limNow.rateLimitedUntil
         && limNow.rateLimitedUntil > Date.now())
+      const exhaustedNow = !!(limNow.quotaExhaustedAt || limNow.creditExhaustedAt)
 
       const nodes = [h('span', { key: 'n' }, name || rawName), ...tagNodes]
 
-      if (limitedNow) {
+      if (exhaustedNow) {
+        const isCredit = !!limNow.creditExhaustedAt
+        nodes.push(h('span', {
+          key: 'exhausted',
+          title: isCredit
+            ? '积分/余额不足，需充值或改用其他模型'
+            : '免费额度已用尽，等待每日重置后才能再用',
+          style: {
+            padding: '0 6px',
+            borderRadius: '4px',
+            background: isCredit ? '#7f1d1d' : '#b91c1c',
+            color: '#fff',
+            fontSize: '10px',
+            lineHeight: '17px',
+            fontWeight: 700,
+            letterSpacing: '0.12em',
+            whiteSpace: 'nowrap',
+            userSelect: 'none',
+            pointerEvents: 'none',
+          },
+        }, isCredit ? '欠 费' : '额 度 尽'))
+      } else if (limitedNow) {
         nodes.push(h('span', {
           key: 'locked',
           style: {
