@@ -153,6 +153,21 @@ window.__ModuleLoader__.load({
       return badgeInFlight
     }
 
+    /**
+     * 拉取「我在每个模型上的累计消耗」。
+     * 失败时保留旧值，不阻断标签与悬停说明的其他内容。
+     */
+    function refreshUsage() {
+      return fetchJson('/cost-tracker/usage')
+        .then(json => {
+          if (json && json.ok && json.models && typeof json.models === 'object') {
+            myUsage = json.models
+          }
+          return myUsage
+        })
+        .catch(() => myUsage)
+    }
+
     function isWorkbuddy(provider) {
       const pid = String((provider && provider.id) || '')
       return pid.indexOf('workbuddy') !== -1
@@ -182,6 +197,33 @@ window.__ModuleLoader__.load({
       const m = s.match(/^x?([\d.]+)$/i)
       return m ? m[1] + 'x 倍率' : s
     }
+
+    /** 数字紧凑显示：1234.5 → 1.2k */
+    function fmtNum(n) {
+      const v = Number(n)
+      if (!isFinite(v) || v <= 0) return '0'
+      if (v >= 1000000) return (v / 1000000).toFixed(1).replace(/\.0$/, '') + 'M'
+      if (v >= 10000) return (v / 1000).toFixed(1).replace(/\.0$/, '') + 'k'
+      if (v >= 1000) return String(Math.round(v))
+      return String(Math.round(v * 100) / 100)
+    }
+
+    /** token 数紧凑显示：2630956 → 2.63M */
+    function fmtTokens(n) {
+      const v = Number(n)
+      if (!isFinite(v) || v <= 0) return '0 tokens'
+      if (v >= 1000000) return (v / 1000000).toFixed(2).replace(/\.?0+$/, '') + 'M tokens'
+      if (v >= 1000) return (v / 1000).toFixed(1).replace(/\.0$/, '') + 'K tokens'
+      return String(Math.round(v)) + ' tokens'
+    }
+
+    /**
+     * 我在每个模型上的累计消耗。
+     * 由宿主 /cost-tracker/usage 路由下发（按模型聚合）。
+     * 悬停说明里显示「你已用：N 轮 · X 积分」，让用户知道这个模型
+     * 对自己到底有多贵——这是选模型时最直接的依据。
+     */
+    let myUsage = {}
 
     /** 北京时间现在是否处于 deepseek 官方非高峰（5 折）时段 */
     function isOffPeakNow() {
@@ -263,35 +305,60 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 悬停说明：
-     *   1) 倍率
-     *   2) 促销/折扣说明
-     *   3) **可用状态**——额度用尽 / 限流时明确告知何时能再用
+     * 悬停说明：把一个 WorkBuddy 模型的所有有用信息一次讲全。
      *
-     * 数据来源三条（优先级从高到低）：
-     *   a) 上游 429 报文里的精确重置时间（rateLimitedUntil）
-     *   b) 本地记录的额度用尽（quotaExhaustedAt，免费模型 429 = 每日赠额用尽）
-     *   c) 都没有则显示「可用」
+     * 为什么重写：以前只有「倍率 + 促销 + 可用状态」三行，且：
+     *   - 上下文窗口（决定能塞多长的历史）一个字都不提
+     *   - 「每天送多少免费额度」只有 hy3/step-5-preview 两个手写文案
+     *   - 免费时段型模型（hy4-preview）不显示时段就一句笼统的「免费」
+     *   - 用户自己花了多少在这个模型上，完全不显示
+     * 用户要求「每一个 workbuddy 模型都告诉我模型信息」，所以这里按
+     * 统一模板输出，缺的字段自动跳过，不会出现空白行。
      *
-     * 注意：WorkBuddy 的 status 接口**不返回**额度/限流状态，
-     * 所以只能靠 429 事件累积。没触发过 429 的模型显示为可用。
+     * 输出行序（有才显示）：
+     *   1. 计费方式：免费 / x倍率（+当前时段是否免费/折扣）
+     *   2. 上下文窗口
+     *   3. 免费额度政策（夜间型给时段，每日赠额型给重置规则）
+     *   4. 促销 / 峰谷说明
+     *   5. 你在该模型上的累计消耗
+     *   6. 可用状态：额度尽 / 限流 / 上下文溢出
      */
     function buildHoverLines(modelId, meta) {
       const lines = []
       const isNightFree = (meta.badges || []).some((b) => String(b).indexOf('夜间免费') !== -1)
-      // 夜间免费模型（hy4-preview）：非夜间时段要按倍率计费，
-      // 所以第一行显示当前实际状态，而不是笼统的「免费」
-      if (isNightFree) {
-        lines.push(isNightNow() ? '夜间免费中' : (fmtRate(meta.credits) + '（仅夜间免费）'))
+
+      // ---- 1) 计费方式 ----
+      if (meta.free === true) {
+        lines.push('免费（当前不消耗积分）')
+      } else if (isNightFree) {
+        lines.push(isNightNow()
+          ? '夜间免费中（23:00–次日 8:00）'
+          : fmtRate(meta.credits) + '（仅 23:00–次日 8:00 免费）')
       } else {
-        lines.push(meta.free ? '免费' : (fmtRate(meta.credits) || '倍率未知'))
+        lines.push(fmtRate(meta.credits) || '倍率未知')
       }
 
+      // ---- 2) 上下文窗口 ----
+      if (meta.contextWindow) {
+        const k = Math.round(meta.contextWindow / 1000)
+        lines.push('上下文 ' + k + 'K tokens（历史过长会被截断或报错）')
+      }
+
+      // ---- 3) 免费额度政策 ----
+      // 夜间免费型：明确时段；每日赠额型：明确重置规则。
+      // 两者都可能不在 QUOTA_MODEL 清单里（清单可配置），所以按特征判断而非查表。
+      if (isNightFree) {
+        lines.push('免费时段：每晚 23:00 — 次日 08:00（其余时段按倍率计费）')
+      } else if (meta.free === true) {
+        lines.push('每日赠送免费额度，当日用尽后需等次日 00:00 重置')
+      }
+
+      // ---- 4) 促销 / 峰谷说明 ----
       const desc = PROMO_DESC[modelId]
       if (desc) {
         lines.push(desc)
       } else if (NIGHT_DISCOUNT.indexOf(modelId) !== -1) {
-        lines.push('周一至周五 09:00–12:00、14:00–18:00 属高峰原价；中午、晚间与周末节假日为谷时 5 折。')
+        lines.push('周一至周五 09:00–12:00、14:00–18:00 属高峰原价；中午、晚间与周末节假日为谷时 5 折')
       } else if (meta.badges && meta.badges.length) {
         // badge 是上游实时状态（夜间免费/限时免费/独家限免…）。
         // 本地不编造时间窗——那些日期会过期且与上游不同步；
@@ -303,7 +370,19 @@ window.__ModuleLoader__.load({
           lines.push('⚠ 限时活动：有期限限制，结束后恢复原价/按倍率计费，以官方公告为准')
         }
       }
-      // ===== 可用状态 =====
+
+      // ---- 5) 用户在该模型上的累计消耗 ----
+      const usage = myUsage && myUsage[modelId]
+      if (usage) {
+        const parts = []
+        parts.push(usage.turns + ' 轮')
+        if (usage.credits > 0) parts.push(fmtNum(usage.credits) + ' 积分')
+        if (usage.cost > 0) parts.push('¥' + fmtNum(usage.cost))
+        if (usage.tokens > 0) parts.push(fmtTokens(usage.tokens))
+        if (parts.length > 1) lines.push('你已用：' + parts.slice(1).join(' · '))
+      }
+
+      // ---- 6) 可用状态 ----
       // ⚠️ 历史教训（2026-10-21）：这里原来只认「rateLimitedUntil 还没到」，
       // 于是手动标记 12 小时过期后，hy3 / step-5-preview 的「额度已用尽」
       // 提示**整条消失**——用户看到的就是「莫名就用完了，还没任何提示」。
@@ -494,6 +573,9 @@ window.__ModuleLoader__.load({
 
       useEffect(() => {
         if (badgeCache === null) refreshBadges()
+        if (limitCache === null) refreshLimits()
+        // 累计消耗数据：首次挂载时拉一次，之后由 30s 定时器维护
+        refreshUsage()
       }, [])
 
       // 悬停期间每秒重绘，让「还剩 X 分 Y 秒」实时跳动
@@ -648,10 +730,12 @@ window.__ModuleLoader__.load({
       refreshBadges()
       // 限流状态也要拉：悬停说明里要显示「何时恢复」
       refreshLimits()
+      // 累计消耗：悬停说明里显示「你已用：N 轮 · X 积分」
+      refreshUsage()
 
       // 悬停说明里的倒计时需要持续刷新，30 秒重拉一次限流状态
       ctx.effect(() => {
-        const t = setInterval(() => { refreshLimits() }, 30000)
+        const t = setInterval(() => { refreshLimits(); refreshUsage() }, 30000)
         return () => clearInterval(t)
       }, 'cost-tracker: limits refresh')
 
