@@ -1387,6 +1387,10 @@ window.__ModuleLoader__.load({
               }
               if (text) toast = { key: 'turn-' + cur + '-' + Date.now(), text, kind }
             }
+            // 提示音：只在**真要弹气泡**时响一次。
+            // 放在这里而不是组件里，是因为这里是唯一确定「有新回合」的位置，
+            // 组件重渲染会被去重逻辑影响，容易漏响或多响。
+            if (toast) { try { playNoticeSound(readToastPref()) } catch { /* 忽略 */ } }
             noticeShared = { ledger: j, lastTurn: cur, key, toast: toast || (noticeShared ? noticeShared.toast : null) }
             // 诊断：把最近一次 poll 的结果挂上去，便于在控制台核对气泡是否触发
             diag.lastTurn = cur
@@ -1931,6 +1935,59 @@ window.__ModuleLoader__.load({
       fontPx: 0,          // 气泡字号（px）；0 = 跟随 DSH 会话字体
       editing: false,     // 是否常驻显示可拖动预览（用户手动开关）
       dockAdvice: false,  // 是否在输入框上方常驻一条建议（默认关：建议已并入气泡）
+      // —— 音效 ——
+      soundOn: false,     // 气泡出现时是否播放提示音（默认关，避免突然发声打扰）
+      soundVol: 0.3,      // 音量 0–1
+      soundKind: 'ping',  // ping（清脆短音）| coin（金币感）| soft（柔和）
+    }
+
+    // ======================================================================
+    // 提示音：用 WebAudio 现场合成，不依赖任何音频文件。
+    //
+    // 为什么合成而不是加载 mp3：插件是 Junction 到 workspace 的，没有构建
+    // 步骤也没有资源打包，外链音频在 file:// 或打包后容易失效。合成音零
+    // 依赖、体积为零，且音色可以用振荡器精确控制。
+    //
+    // 浏览器自动播放策略：AudioContext 必须在用户手势后才能启动。
+    // 气泡由用户的对话触发（属于手势链），通常可直接播放；若被挂起，
+    // 这里会尝试 resume，失败则静默忽略——绝不因提示音让主流程报错。
+    // ======================================================================
+    let audioCtx = null
+    function playNoticeSound(pref) {
+      try {
+        if (pref.soundOn !== true) return
+        const vol = Math.max(0, Math.min(1, Number(pref.soundVol) >= 0 ? Number(pref.soundVol) : 0.3))
+        if (vol <= 0) return
+        const AC = window.AudioContext || window.webkitAudioContext
+        if (!AC) return
+        if (!audioCtx) audioCtx = new AC()
+        if (audioCtx.state === 'suspended') { try { audioCtx.resume() } catch { /* 忽略 */ } }
+
+        // 三种音色：都是一两个正弦音的短促组合，不刺耳
+        const kind = String(pref.soundKind || 'ping')
+        const now = audioCtx.currentTime
+        const notes = kind === 'coin'
+          ? [{ f: 880, t: 0, d: 0.09 }, { f: 1318.5, t: 0.08, d: 0.14 }]
+          : kind === 'soft'
+            ? [{ f: 523.25, t: 0, d: 0.18 }]
+            : [{ f: 1046.5, t: 0, d: 0.1 }, { f: 1568, t: 0.06, d: 0.12 }]
+
+        for (const n of notes) {
+          const osc = audioCtx.createOscillator()
+          const gain = audioCtx.createGain()
+          osc.type = 'sine'
+          osc.frequency.value = n.f
+          // 指数衰减包络：起音快、尾音短，听起来像「叮」而不是「哔」
+          const t0 = now + n.t
+          gain.gain.setValueAtTime(0.0001, t0)
+          gain.gain.exponentialRampToValueAtTime(Math.max(0.0001, vol), t0 + 0.012)
+          gain.gain.exponentialRampToValueAtTime(0.0001, t0 + n.d)
+          osc.connect(gain)
+          gain.connect(audioCtx.destination)
+          osc.start(t0)
+          osc.stop(t0 + n.d + 0.02)
+        }
+      } catch { /* 提示音失败绝不影响主流程 */ }
     }
     let toastPref = null
     const toastPrefListeners = new Set()
@@ -1956,6 +2013,9 @@ window.__ModuleLoader__.load({
             if (typeof o.autoFit === 'boolean') v.autoFit = o.autoFit
             if (typeof o.editing === 'boolean') v.editing = o.editing
             if (typeof o.dockAdvice === 'boolean') v.dockAdvice = o.dockAdvice
+            if (typeof o.soundOn === 'boolean') v.soundOn = o.soundOn
+            if (Number(o.soundVol) >= 0) v.soundVol = Math.max(0, Math.min(1, Number(o.soundVol)))
+            if (typeof o.soundKind === 'string') v.soundKind = o.soundKind
             if (Number(o.fontPx) > 0) v.fontPx = clampNum(o.fontPx, 8, 40, 0)
             if (o.custom && typeof o.custom === 'object') {
               // 越界值一律夹回合法区间：手改 localStorage 或旧版本数据都不能
@@ -2195,6 +2255,57 @@ window.__ModuleLoader__.load({
         // 用户明确要求去掉按宽高缩放字号的做法：横向（宽度）由拖动决定，
         // 纵向随内容自适应，字号保持固定（fontPx 或会话字体）。
         // 因此这里不再渲染 autoFit 开关。
+
+        // ---- 提示音 ----
+        h('div', { key: 'snd', className: 'dshctp-hint', style: { margin: '8px 0 2px' } }, '提示音'),
+        h('div', { key: 'sndv' }, [
+          chip(pref.soundOn ? '✓ 气泡出现时响一声' : '气泡出现时响一声（已关闭）',
+            pref.soundOn,
+            () => {
+              writeToastPref({ soundOn: !pref.soundOn })
+              // 开启时立刻试听，让用户马上知道音量与音色是否合适
+              if (!pref.soundOn) playNoticeSound({ ...pref, soundOn: true })
+            },
+            'sound-toggle'),
+        ]),
+        h('div', { key: 'sndrow', className: 'dshctp-numrow', style: { marginTop: '6px' } }, [
+          h('label', { key: 'vol', className: 'dshctp-num' }, [
+            h('span', { key: 'l' }, '音量'),
+            h('input', {
+              key: 'i',
+              type: 'number',
+              min: 0,
+              max: 100,
+              step: 5,
+              value: String(Math.round((Number(pref.soundVol) || 0) * 100)),
+              onChange: (e) => writeToastPref({ soundVol: clampNum(e.target.value, 0, 100, 30) / 100 }),
+            }),
+            h('span', { key: 'h', className: 'dshctp-hint' }, '%'),
+          ]),
+          h('button', {
+            key: 'test',
+            type: 'button',
+            className: 'dshctp-btn',
+            onClick: () => playNoticeSound({ ...pref, soundOn: true }),
+          }, '试听'),
+        ]),
+        h('div', { key: 'sndkind', style: { marginTop: '6px' } }, [
+          chip(pref.soundKind === 'ping' ? '✓ 清脆' : '清脆',
+            pref.soundKind === 'ping',
+            () => { writeToastPref({ soundKind: 'ping' }); playNoticeSound({ ...pref, soundOn: true, soundKind: 'ping' }) },
+            'kind-ping'),
+          chip(pref.soundKind === 'coin' ? '✓ 金币' : '金币',
+            pref.soundKind === 'coin',
+            () => { writeToastPref({ soundKind: 'coin' }); playNoticeSound({ ...pref, soundOn: true, soundKind: 'coin' }) },
+            'kind-coin'),
+          chip(pref.soundKind === 'soft' ? '✓ 柔和' : '柔和',
+            pref.soundKind === 'soft',
+            () => { writeToastPref({ soundKind: 'soft' }); playNoticeSound({ ...pref, soundOn: true, soundKind: 'soft' }) },
+            'kind-soft'),
+        ]),
+        h('div', { key: 'sndhint', className: 'dshctp-hint', style: { marginTop: '2px', opacity: 0.8 } },
+          '音效由浏览器现场合成，无外部文件依赖。默认关闭；'
+          + '若浏览器拦截自动播放，首次点击页面后即可正常出声。'),
 
         // 建议的显示位置：默认并进气泡（不在输入框上方另开一条）
         h('div', { key: 'dk', className: 'dshctp-hint', style: { margin: '6px 0 2px' } }, '省钱建议'),
