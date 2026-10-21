@@ -1173,12 +1173,27 @@ window.__ModuleLoader__.load({
         return () => clearInterval(t)
       }, 'cost-tracker: limits refresh')
 
+      // ---- 模型下拉标签（single slot）----
+      // ⚠️ 必须显式给 priority。
+      // `conversation.input.model.label` 是 **single** slot，原生 UI（registrant
+      // "Kb"）已占用 priority 0。用默认 0 注册会抛
+      //   "single slot ... already has a registration at priority 0
+      //    (registered by Kb) — register at a different priority to shadow it"
+      // 而这个异常会被外层 try/catch 吞掉，**连带后面的侧栏入口和提示全部
+      // 不执行**——2026-10-21 的「钱袋没了 + 提示没了」就是这个原因。
+      // 规则：single slot 用不同 priority 遮蔽原生渲染（priority 越低越优先）。
       ctx.effect(() => {
-        const dispose = ctx.slots.inject('conversation.input.model.label', () =>
-          ctx.slots.register({
-            name: 'conversation.input.model.label',
-            locale: namespace,
-          }, CostTrackerModelLabel))
+        let dispose = null
+        try {
+          dispose = ctx.slots.inject('conversation.input.model.label', () =>
+            ctx.slots.register({
+              name: 'conversation.input.model.label',
+              priority: 10,
+              locale: namespace,
+            }, CostTrackerModelLabel))
+        } catch (e) {
+          try { console.error('[dsh-cost-tracker] model label register failed:', e) } catch { /* 忽略 */ }
+        }
         return () => { try { dispose && dispose() } catch { /* 忽略 */ } }
       }, 'cost-tracker: model label')
 
@@ -1195,8 +1210,17 @@ window.__ModuleLoader__.load({
       //      出现「瞬移到用户头像位置并覆盖头像」。
       // 侧栏行由本 client 半区在每次页面加载时重新注册，本就是稳定入口，
       // 浮层只会制造重复入口，故彻底移除。
-      registerSidebarEntry(ctx, namespace)
-      registerCostNotices(ctx)
+      //
+      // ⚠️ 三个注册点（模型标签 / 侧栏入口 / 主动提示）各自独立 try/catch：
+      // 任一注册抛错都不许连累其他功能，更不许冒泡到 applyInner 之外。
+      // 2026-10-21 的教训：单个 single-slot 的 priority 冲突，
+      // 就让整个插件的钱袋和主动提示一起消失。
+      try { registerSidebarEntry(ctx, namespace) } catch (e) {
+        try { console.error('[dsh-cost-tracker] sidebar entry failed:', e) } catch { /* 忽略 */ }
+      }
+      try { registerCostNotices(ctx) } catch (e) {
+        try { console.error('[dsh-cost-tracker] notices failed:', e) } catch { /* 忽略 */ }
+      }
     }
 
     // ======================================================================
@@ -1227,6 +1251,15 @@ window.__ModuleLoader__.load({
 
     /** 注册两个提示位点 */
     function registerCostNotices(ctx) {
+      // 自诊断：把注册结果挂到 window 上，便于在真实浏览器里核对
+      // （inspect 工具在本环境拿不到 occupants，只能让页面自己报）
+      // ⚠️ 只初始化**自己负责**的两个字段。panellist / panel 归
+      // registerSidebarEntry 管，这里若也置 'pending' 会把它的成功状态
+      // 覆盖掉——2026-10-21 实测踩过：侧栏明明注册成功，诊断却显示 pending。
+      const diag = (window.__dshCostTrackerDiag = window.__dshCostTrackerDiag || {})
+      if (diag.dock === undefined) diag.dock = 'pending'
+      if (diag.overlay === undefined) diag.overlay = 'pending'
+
       ctx.effect(() => {
         let alive = true
         const poll = () => {
@@ -1275,22 +1308,36 @@ window.__ModuleLoader__.load({
 
       // 常驻条（输入框上方）
       ctx.slots.inject('conversation.input.dock', () => {
-        return ctx.slots.register({
-          name: 'conversation.input.dock',
-          id: 'dsh-cost-tracker-notice',
-          order: 50,
-          label: '费用提示',
-        }, () => h(CostDockLive, { subscribe }))
+        try {
+          const off = ctx.slots.register({
+            name: 'conversation.input.dock',
+            id: 'dsh-cost-tracker-notice',
+            order: 50,
+            label: '费用提示',
+          }, () => h(CostDockLive, { subscribe }))
+          diag.dock = 'registered'
+          return off
+        } catch (e) {
+          diag.dock = 'failed: ' + (e && e.message ? e.message : String(e))
+          return () => {}
+        }
       })
 
       // 帧级气泡（回合结束）
       ctx.slots.inject('shell.overlay', () => {
-        return ctx.slots.register({
-          name: 'shell.overlay',
-          id: 'dsh-cost-tracker-toast',
-          order: 60,
-          label: 'dsh-cost-tracker',
-        }, () => h(CostToastLive, { subscribe }))
+        try {
+          const off = ctx.slots.register({
+            name: 'shell.overlay',
+            id: 'dsh-cost-tracker-toast',
+            order: 60,
+            label: 'dsh-cost-tracker',
+          }, () => h(CostToastLive, { subscribe }))
+          diag.overlay = 'registered'
+          return off
+        } catch (e) {
+          diag.overlay = 'failed: ' + (e && e.message ? e.message : String(e))
+          return () => {}
+        }
       })
     }
 
@@ -1355,6 +1402,9 @@ window.__ModuleLoader__.load({
      */
     const PANEL_ID = 'dsh-cost-tracker'
     function registerSidebarEntry(ctx, namespace) {
+      const diag = (window.__dshCostTrackerDiag = window.__dshCostTrackerDiag || {})
+      if (diag.panellist === undefined) diag.panellist = 'pending'
+      if (diag.panel === undefined) diag.panel = 'pending'
       // ⚠️ 必须等 slot 就绪再注册。
       //
       // 踩过的坑（2026-10-21）：裸调用 ctx.slots.register({name:'sidebar.panellist'})
@@ -1377,7 +1427,9 @@ window.__ModuleLoader__.load({
               key: PANEL_ID,
               locale: namespace,
             }, CostTrackerPanel)
+            diag.panel = 'registered'
           } catch (e) {
+            diag.panel = 'failed: ' + (e && e.message ? e.message : String(e))
             try { console.error('[dsh-cost-tracker] main panel register failed:', e) } catch { /* 忽略 */ }
           }
           try {
@@ -1388,7 +1440,9 @@ window.__ModuleLoader__.load({
               label: '费用',
               locale: namespace,
             }, CostTrackerNavIcon)
+            diag.panellist = 'registered'
           } catch (e) {
+            diag.panellist = 'failed: ' + (e && e.message ? e.message : String(e))
             try { console.error('[dsh-cost-tracker] sidebar.panellist register failed:', e) } catch { /* 忽略 */ }
           }
         })
