@@ -89,6 +89,14 @@
       '.dshcw-btn.on{background:rgba(74,222,128,.25);border-color:rgba(74,222,128,.5);color:#bbf7d0}',
       '.dshcw-btn.danger{color:#fca5a5;border-color:rgba(248,113,113,.4)}',
       '.dshcw-setfoot{display:flex;justify-content:flex-end;gap:6px;padding-top:8px;border-top:1px solid rgba(255,255,255,.1);margin-top:6px}',
+      // 模型信息编辑区（设置面板里的「选模型 + 补信息」）
+      '.dshcw-minfo{display:flex;flex-direction:column;gap:5px;padding:6px 4px 8px;border-top:1px solid rgba(255,255,255,.1);margin-top:6px}',
+      '.dshcw-minfo .mhead{display:flex;align-items:center;justify-content:space-between;font-weight:700;color:#9ca3af}',
+      '.dshcw-minfo select,.dshcw-minfo textarea{width:100%;box-sizing:border-box;background:#0b1220;color:#e5e7eb;border:1px solid rgba(255,255,255,.18);border-radius:6px;padding:4px 6px;font-size:11px;font-family:inherit}',
+      '.dshcw-minfo textarea{min-height:58px;resize:vertical;line-height:1.5;white-space:pre-wrap}',
+      '.dshcw-minfo .hint{color:#6b7280;font-size:10px;line-height:1.55}',
+      '.dshcw-minfo .savebar{display:flex;align-items:center;gap:6px;justify-content:flex-end}',
+      '.dshcw-minfo .saved{color:#86efac;font-size:10px}',
       '.dshcw-hidden .dshcw-body{display:none}',
       '.dshcw-hidden .dshcw-head{border-bottom:none}',
       '.dshcw-drag{cursor:move}'
@@ -121,6 +129,39 @@
   // ---------- 建 DOM ----------
   var root = null
   var lastReco = null
+  /** 侧栏 💰 按钮引用：看门狗重建时复用，避免堆出多个入口 */
+  var sidebarBtn = null
+  /** 自愈看门狗计时器（只装一次） */
+  var watchdogTimer = null
+
+  // ---------- 模型官方信息（限时活动 / 免费时段）----------
+  /**
+   * 数据来源 /cost-tracker/models：
+   *   modelCatalog: [{ id, name }]  设置面板下拉框
+   *   modelNotes:   { id: 文案 }    内置官方公告 + 用户/AI 覆盖后的结果
+   *
+   * 改动落盘在 .cost-tracker.json 的 modelNotes，AI 与面板读写同一份，
+   * 所以用户「把官方公告贴给 AI」和「自己在设置里改」效果一致。
+   */
+  var modelInfo = { catalog: [], notes: {} }
+  var modelInfoLoaded = false
+
+  function loadModelInfo() {
+    return fetchJson('/cost-tracker/models').then(function (j) {
+      if (j && Array.isArray(j.modelCatalog)) modelInfo.catalog = j.modelCatalog
+      if (j && j.modelNotes && typeof j.modelNotes === 'object') modelInfo.notes = j.modelNotes
+      modelInfoLoaded = true
+      return modelInfo
+    }).catch(function () { return modelInfo })
+  }
+
+  function saveModelNote(id, note) {
+    return fetch('/cost-tracker/model-notes', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: id, note: note }),
+    }).then(function (r) { return r.json() })
+  }
 
   function el(tag, cls, text) {
     var n = document.createElement(tag)
@@ -232,7 +273,12 @@
    * 只跟随账户行的坐标，不碰它的 DOM 树。
    */
   function mountSidebarButton() {
+    // 复用：看门狗重建或 HMR 重复执行时，先摘掉旧按钮，避免堆出多个 💰
+    if (sidebarBtn && sidebarBtn.parentNode) {
+      try { sidebarBtn.parentNode.removeChild(sidebarBtn) } catch (e) {}
+    }
     var btn = document.createElement('button')
+    sidebarBtn = btn
     btn.textContent = '💰'
     btn.title = '费用'
     btn.style.cssText = 'position:fixed;z-index:12005;width:26px;height:22px;' +
@@ -257,10 +303,15 @@
 
     function place() {
       var acc = findAccountButton()
-      if (!acc) { btn.style.display = 'none'; return }
-      var r = acc.getBoundingClientRect()
-      if (r.width === 0 || r.height === 0) { btn.style.display = 'none'; return }
+      var r = acc ? acc.getBoundingClientRect() : null
+      // 入口永远可见：找不到账户行（侧栏折叠 / UI 改版 / 窗口过窄）时
+      // 退到左下角固定位，绝不 display:none——入口一没，用户就以为整个插件丢了。
       btn.style.display = 'flex'
+      if (!r || r.width === 0 || r.height === 0) {
+        btn.style.left = '8px'
+        btn.style.top = ((window.innerHeight || 800) - 34) + 'px'
+        return
+      }
       // 贴账户行右端内侧（与头像同一行的视觉位置），垂直居中
       btn.style.left = Math.max(2, r.right - 30) + 'px'
       btn.style.top = (r.top + Math.max(0, (r.height - 22) / 2)) + 'px'
@@ -309,19 +360,28 @@
     } catch (e) { return null }
   }
 
-  /** 面板定位：锚定账户区右侧、底对齐；找不到账户区就退回左下 */
+  /** 面板定位：锚定账户区右侧、底对齐；找不到账户区就退回左下，并钳制在视口内 */
   function positionPanel() {
     if (!root) return
     var acc = findAccountArea()
     var w = settings.cardWidth
+    var h = root.offsetHeight || 300
+    var vw = window.innerWidth || 1200
+    var vh = window.innerHeight || 800
+    var left, top
     if (acc) {
-      root.style.left = Math.max(4, acc.left + acc.width + 8) + 'px'
-      root.style.top = Math.max(4, acc.top + acc.height - (root.offsetHeight || 300)) + 'px'
+      left = acc.left + acc.width + 8
+      top = acc.top + acc.height - h
     } else {
-      root.style.left = '8px'
-      root.style.top = Math.max(4, (window.innerHeight || 800) - (root.offsetHeight || 300) - 12) + 'px'
+      left = 8
+      top = vh - h - 12
     }
-    root.style.width = w + 'px'
+    // 视口钳制：任何情况下都不能把面板放到看不见的地方
+    left = Math.max(4, Math.min(left, vw - Math.min(w, vw - 8) - 4))
+    top = Math.max(4, Math.min(top, vh - Math.min(h, vh - 8) - 4))
+    root.style.left = left + 'px'
+    root.style.top = top + 'px'
+    root.style.width = Math.min(w, vw - 8) + 'px'
   }
 
   // （拖动逻辑已随悬浮模式移除）
@@ -357,6 +417,7 @@
   }
 
   function render(summary, reco, ledger) {
+    if (!root) return
     var body = root.querySelector('.dshcw-body')
     if (!body) return
     body.textContent = ''
@@ -558,6 +619,7 @@
         // 消耗还没到手：也弹一次提示「对话已结束，积分结算中」+ 响铃——
         // 之前的静默导致用户以为气泡/音效坏了。复查到账后 key 变化
         // 会再弹一次真实数字（带「结算完成」标记）。
+        var wbReason = (lt.workbuddy && lt.workbuddy.reason) || ''
         if (lt.workbuddy && (wbReason === 'zero-pending' || wbReason === 'unconfirmed')) {
           showTurnBubble('本轮对话结束，积分结算中…')
           if (settings.sound) playChime()
@@ -693,6 +755,77 @@
     r5h.appendChild(el('span', 'hint', '开着时面板一直在，💰 仍可临时收起'))
     setEl.appendChild(r5h)
 
+    // 模型官方信息（限时活动 / 免费时段）：选模型 + 补信息
+    // 用途：官方常发「限时免费/夜间免费」，日期一过就失效；把公告写在这里，
+    // 面板随模型列出，用户不用记。也能让 AI 直接改（同一份数据）。
+    var minfo = el('div', 'dshcw-minfo')
+    minfo.appendChild(el('div', 'mhead', '模型信息'))
+
+    var sel = document.createElement('select')
+    minfo.appendChild(sel)
+
+    var ta = document.createElement('textarea')
+    ta.placeholder = '例：限时免费：7月6日–10月31日，每日赠送免费额度'
+    minfo.appendChild(ta)
+
+    minfo.appendChild(el('div', 'hint',
+      '把官方公告原文发给 AI，让它更新模型信息；也可以直接在这里改后保存。留空 = 不显示该模型的活动说明。'))
+
+    var savebar = el('div', 'savebar')
+    var savedTip = el('span', 'saved', '')
+    var saveBtn = el('span', 'dshcw-btn', '保存')
+    savebar.appendChild(savedTip)
+    savebar.appendChild(saveBtn)
+    minfo.appendChild(savebar)
+    setEl.appendChild(minfo)
+
+    function fillModelSelect() {
+      while (sel.firstChild) sel.removeChild(sel.firstChild)
+      var list = modelInfo.catalog
+      if (!list.length) {
+        var ph = document.createElement('option')
+        ph.value = ''
+        ph.textContent = '（未取到模型列表）'
+        sel.appendChild(ph)
+        return
+      }
+      for (var mi = 0; mi < list.length; mi++) {
+        var op = document.createElement('option')
+        op.value = list[mi].id
+        op.textContent = list[mi].name || list[mi].id
+        sel.appendChild(op)
+      }
+    }
+    function syncNote() {
+      var id = sel.value
+      ta.value = (modelInfo.notes && modelInfo.notes[id]) || ''
+      savedTip.textContent = ''
+    }
+    fillModelSelect()
+    sel.addEventListener('change', syncNote)
+    syncNote()
+    if (!modelInfoLoaded) {
+      loadModelInfo().then(function () { fillModelSelect(); syncNote() })
+    }
+
+    saveBtn.addEventListener('click', function () {
+      var id = sel.value
+      if (!id) return
+      saveBtn.textContent = '保存中…'
+      saveModelNote(id, ta.value).then(function (j) {
+        if (j && j.ok) {
+          if (j.modelNotes && typeof j.modelNotes === 'object') modelInfo.notes = j.modelNotes
+          savedTip.textContent = '已保存'
+        } else {
+          savedTip.textContent = '保存失败'
+        }
+        saveBtn.textContent = '保存'
+      }).catch(function () {
+        savedTip.textContent = '保存失败'
+        saveBtn.textContent = '保存'
+      })
+    })
+
     // 底部：重置面板（重新锚定账户区 + 刷新数据）
     var foot = el('div', 'dshcw-setfoot')
     var resetBtn = el('span', 'dshcw-btn danger', '重新锚定面板')
@@ -737,6 +870,41 @@
     } catch (e) {}
   }
 
-  if (document.body) start()
-  else window.addEventListener('DOMContentLoaded', start)
+  /**
+   * 自愈看门狗：DSH 视图切换 / HMR / React 重建 DOM 会把面板或 💰 入口
+   * 带走，表现为「插件时不时消失」。3 秒巡检一次自动补回。
+   *
+   * 只做三件事，全部幂等：
+   *   1) 面板节点不在文档里 → 丢弃引用后重建
+   *   2) 💰 入口不在文档里 → 补一个
+   *   3) 常驻模式下面板被意外收起 → 重新显示
+   */
+  function startWatchdog() {
+    if (watchdogTimer) return
+    watchdogTimer = setInterval(function () {
+      try {
+        var host = document.body || document.documentElement
+        if (!host) return
+        if (!root) { start(); return }
+        if (!host.contains(root)) {
+          root = null
+          start()
+          return
+        }
+        if (!sidebarBtn || !host.contains(sidebarBtn)) mountSidebarButton()
+        if (settings.alwaysShow && root.style.display === 'none') {
+          root.style.display = 'block'
+          positionPanel()
+        }
+      } catch (e) {}
+    }, 3000)
+  }
+
+  function boot() {
+    start()
+    startWatchdog()
+  }
+
+  if (document.body) boot()
+  else window.addEventListener('DOMContentLoaded', boot)
 })()
