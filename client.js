@@ -757,8 +757,26 @@ window.__ModuleLoader__.load({
     // ======================================================================
 
     const PANEL_CSS = [
-      '.dshctp-root{display:flex;flex-direction:column;gap:14px;padding:18px 20px;max-width:860px;',
+      // ⚠️ 必须有滚动：面板内容比一屏高（余额/记账/模型清单/编辑器/设置卡），
+      // 早期只写 max-width 没有高度约束与 overflow，超出部分直接被裁掉，
+      // 用户滚轮也滚不动，最底下的设置卡根本看不到。
+      // 用 height:100% + min-height:0 + overflow-y:auto 撑满宿主给的面板区，
+      // 让滚动发生在面板内部，而不是靠整个页面滚。
+      '.dshctp-root{display:flex;flex-direction:column;gap:14px;padding:18px 20px;',
+      '  box-sizing:border-box;width:100%;height:100%;min-height:0;',
+      '  overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;',
+      '  scrollbar-gutter:stable;',
       '  color:var(--dsw-alias-text-primary,inherit);font-size:13px;line-height:1.6}',
+      // 滚动条样式：跟随主题，不让它看起来像外来的
+      '.dshctp-root::-webkit-scrollbar{width:10px}',
+      '.dshctp-root::-webkit-scrollbar-track{background:transparent}',
+      '.dshctp-root::-webkit-scrollbar-thumb{background:var(--dsw-alias-border-primary,rgba(127,127,127,.35));',
+      '  border-radius:6px;border:2px solid transparent;background-clip:content-box}',
+      '.dshctp-root::-webkit-scrollbar-thumb:hover{background:var(--dsw-alias-border-strong,rgba(127,127,127,.55));',
+      '  background-clip:content-box}',
+      // 内容限宽并居中，超宽屏幕上不至于拉成一整行
+      '.dshctp-inner{display:flex;flex-direction:column;gap:14px;width:100%;max-width:860px;',
+      '  margin:0 auto;flex:0 0 auto}',
       '.dshctp-root h2{margin:0;font-size:16px;font-weight:700}',
       '.dshctp-root h3{margin:0 0 6px;font-size:12px;font-weight:700;letter-spacing:.04em;',
       '  color:var(--dsw-alias-text-secondary,#9ca3af);text-transform:uppercase}',
@@ -983,7 +1001,11 @@ window.__ModuleLoader__.load({
         h('span', { key: 'v', className: 'v' + (cls ? ' ' + cls : '') }, v),
       ])
 
+      // 外层 .dshctp-root 负责撑满 + 滚动，内层 .dshctp-inner 负责限宽居中。
+      // 两层分开是因为在同一元素上同时做「撑满滚动」和「限宽居中」会互相干扰：
+      // max-width 会让滚动条内缩，看起来像内容被截断。
       return h('div', { className: 'dshctp-root' }, [
+        h('div', { key: 'inner', className: 'dshctp-inner' }, [
         h('h2', { key: 't' }, '费用追踪'),
 
         // ---- 余额 ----
@@ -1150,6 +1172,7 @@ window.__ModuleLoader__.load({
 
         // ---- 气泡外观设置 ----
         h(ToastPrefsCard, { key: 'toastprefs' }),
+        ]),
       ])
     }
 
