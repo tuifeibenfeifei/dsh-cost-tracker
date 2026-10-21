@@ -1045,30 +1045,46 @@ window.__ModuleLoader__.load({
               (() => {
                 const lt = ledger.lastTurn
                 if (!lt) return kv('本轮', '—')
-                const parts = []
-                if (Number(lt.costTokenBased) > 0) parts.push('¥' + pNum(lt.costTokenBased))
-                if (lt.workbuddy && typeof lt.workbuddy.spent === 'number' && lt.workbuddy.spent > 0) {
-                  parts.push(pNum(lt.workbuddy.spent) + ' 积分')
-                }
+                // 本轮也要分平台：aliyun 走人民币、workbuddy 走积分，
+                // 拼成一行会让人以为 WorkBuddy 在扣钱。
+                const plat = ((lt.models || [])[0] || {}).platform || ''
                 const reason = lt.workbuddy && lt.workbuddy.reason
                 const pending = reason === 'zero-pending' || reason === 'unconfirmed'
                   || reason === 'baseline-established' || reason === 'baseline-stale'
-                let label
-                if (parts.length) label = parts.join(' / ')
-                else if (pending) label = reason === 'unconfirmed' ? '积分未入账' : '结算中…'
-                else if (lt.allFree) label = '免费'
-                else label = '—'
-                return kv('本轮', label, parts.length ? 'warn' : (label === '免费' ? 'free' : ''))
+                if (plat === 'workbuddy' || (lt.workbuddy && typeof lt.workbuddy.spent === 'number')) {
+                  const spent = Number(lt.workbuddy && lt.workbuddy.spent)
+                  let label
+                  if (Number.isFinite(spent) && spent > 0) label = pNum(spent) + ' 积分'
+                  else if (pending) label = reason === 'unconfirmed' ? '积分未入账' : '结算中…'
+                  else if (lt.allFree) label = '免费'
+                  else label = '0 积分'
+                  return kv('本轮 · WorkBuddy', label,
+                    spent > 0 ? 'warn' : (label === '免费' ? 'free' : ''))
+                }
+                if (Number(lt.costTokenBased) > 0) {
+                  return kv('本轮 · 阿里云', '¥' + pNum(lt.costTokenBased), 'warn')
+                }
+                return kv('本轮', '—')
               })(),
-              kv('今天 ' + ((ledger.day || {}).turns || 0) + ' 轮',
-                (Number((ledger.day || {}).costTokenBased) > 0 ? '¥' + pNum(ledger.day.costTokenBased) + ' / ' : '')
-                + ((ledger.day || {}).workbuddyCredits || 0) + ' 积分'),
-              kv('本月 ' + ((ledger.month || {}).turns || 0) + ' 轮',
-                (Number((ledger.month || {}).costTokenBased) > 0 ? '¥' + pNum(ledger.month.costTokenBased) + ' / ' : '')
-                + ((ledger.month || {}).workbuddyCredits || 0) + ' 积分'),
+              // ⚠️ 两个平台的账必须分列，不能合成一行。
+              // 2026-10-22 用户质疑「WorkBuddy 不是看积分吗，怎么会有人民币计费」——
+              // 实测那 ¥4.70 全部来自 aliyun（阿里云 deepseek-v4.1-flash，11 轮），
+              // WorkBuddy 的 5 个模型 cost 全是 0。口径本身没错，错在面板把
+              // 「今天的 ¥X / Y 积分」写在一起，看起来就像 WorkBuddy 也在扣钱。
+              kv('今天 ' + ((ledger.day || {}).turns || 0) + ' 轮 · 阿里云',
+                '¥' + pNum((ledger.day || {}).costTokenBased),
+                Number((ledger.day || {}).costTokenBased) > 0 ? 'warn' : ''),
+              kv('今天 WorkBuddy',
+                String((ledger.day || {}).workbuddyCredits || 0) + ' 积分',
+                Number((ledger.day || {}).workbuddyCredits) > 0 ? 'warn' : ''),
+              kv('本月 ' + ((ledger.month || {}).turns || 0) + ' 轮 · 阿里云',
+                '¥' + pNum((ledger.month || {}).costTokenBased)),
+              kv('本月 WorkBuddy',
+                String((ledger.month || {}).workbuddyCredits || 0) + ' 积分'),
             ]),
             h('div', { key: 'n', className: 'dshctp-hint', style: { marginTop: '8px' } },
-              '阿里云不参与记账：token 推算偏差过大，无可信金额。'),
+              'WorkBuddy 只扣积分，不产生人民币费用（上表已分平台列出）。'
+              + '阿里云的 ¥ 是 token 按倍率折算的估算值，非账单。'),
           ])
           : null,
 
