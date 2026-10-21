@@ -111,8 +111,14 @@ window.__ModuleLoader__.load({
               rateLimited: m.rateLimited === true,
               rateLimitedUntil: typeof m.rateLimitedUntil === 'number' ? m.rateLimitedUntil : null,
               rateLimitedApprox: m.rateLimitedApprox === true,
+              // 宿主只在标记**仍有效**时才下发这两个字段；已过期的手动标记
+              // 会被置 null，前端据此不显示任何警告。
               quotaExhaustedAt: typeof m.quotaExhaustedAt === 'number' ? m.quotaExhaustedAt : null,
               creditExhaustedAt: typeof m.creditExhaustedAt === 'number' ? m.creditExhaustedAt : null,
+              // 来源：true = 用户手标（WorkBuddy 的 status 接口不返回额度状态，
+              // 手标本质是猜测，可能误判），false = 上游真的 402/429 拒绝。
+              manual: m.manual === true,
+              manualUntil: typeof m.manualUntil === 'number' ? m.manualUntil : null,
               contextOverflowAt: typeof m.contextOverflowAt === 'number' ? m.contextOverflowAt : null,
               note: typeof m.note === 'string' ? m.note : '',
             }
@@ -411,6 +417,16 @@ window.__ModuleLoader__.load({
         lines.push('✅ 限流已结束，可正常使用')
       }
 
+      // 手动标记一律附「可能不准」的免责说明。
+      // ⚠️ 2026-10-21 的两次误报都源于此：用户 10/20 手标了 hy3 /
+      // step-5-preview，之后这两个模型照样成功跑了 19 轮，
+      // 而插件斩钉截铁地显示「额度尽」——用户看到的就是
+      // 「你提示我用完了，但我还能对话」。
+      if ((lim.quotaExhaustedAt || lim.creditExhaustedAt) && lim.manual) {
+        lines.push('ℹ 以上为手动标记（上游不返回额度状态，仅供参考）；'
+          + '24 小时后自动失效，也可在面板里手动清除')
+      }
+
       if (lim.contextOverflowAt) {
         lines.push('⚠ 上次因上下文过长失败，请精简或新建任务')
       }
@@ -634,17 +650,40 @@ window.__ModuleLoader__.load({
       const lines = buildHoverLines(modelId, meta)
 
       // 限流/额度用尽标记：**不经悬停也能一眼看到「这个模型现在不能用」**
-      // 与悬停说明同理：quotaExhaustedAt 一旦记录就长期有效，不因恢复时间过期而消失。
-      // 积分不足（402）单独一个红色「欠费」标记，和「每日额度用尽」区分开——
-      // 前者要充值，后者等次日，处理方式完全不同。
+      // 三种状态用三种颜色，避免把「猜测」和「事实」混为一谈：
+      //   - 上游 402/429 真的拒绝了 → 红色「欠费」/「额度尽」
+      //   - 用户手动标记（猜测，可能误判）→ 灰色「手标」，不吓人
+      //   - 仅临时限流 → 红色「限流」
+      // ⚠️ 教训：2026-10-21 曾把 10/20 的手标误判永久显示成红色「额度尽」，
+      // 而那两个模型之后照样成功跑了 19 轮，用户直接质疑插件在胡说。
       const limNow = (limitCache && limitCache[modelId]) || {}
       const limitedNow = !!(limNow.rateLimited && limNow.rateLimitedUntil
         && limNow.rateLimitedUntil > Date.now())
       const exhaustedNow = !!(limNow.quotaExhaustedAt || limNow.creditExhaustedAt)
+      const manualMark = exhaustedNow && limNow.manual === true
 
       const nodes = [h('span', { key: 'n' }, name || rawName), ...tagNodes]
 
-      if (exhaustedNow) {
+      if (exhaustedNow && manualMark) {
+        // 手标：灰色 + 文字说明这是猜的，绝不冒充事实
+        nodes.push(h('span', {
+          key: 'manual-mark',
+          title: '手动标记，上游不返回额度状态故可能是误判；24 小时后自动失效',
+          style: {
+            padding: '0 6px',
+            borderRadius: '4px',
+            background: '#4b5563',
+            color: '#fff',
+            fontSize: '10px',
+            lineHeight: '17px',
+            fontWeight: 700,
+            letterSpacing: '0.12em',
+            whiteSpace: 'nowrap',
+            userSelect: 'none',
+            pointerEvents: 'none',
+          },
+        }, '手 标'))
+      } else if (exhaustedNow) {
         const isCredit = !!limNow.creditExhaustedAt
         nodes.push(h('span', {
           key: 'exhausted',
