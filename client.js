@@ -795,6 +795,27 @@ window.__ModuleLoader__.load({
       '  border-color:transparent;color:#fff}',
       '.dshctp-hint{font-size:11px;color:var(--dsw-alias-text-secondary,#9ca3af);line-height:1.55}',
       '.dshctp-saved{font-size:11px;color:var(--dsw-alias-state-success-primary,#22a06b)}',
+      // —— 主动提示（常驻条 + 帧级气泡）——
+      // 常驻条位于 conversation.input.dock（输入框上方），用宿主令牌配色
+      '.dshctn-dock{display:flex;flex-direction:column;gap:4px;padding:2px 0}',
+      '.dshctn-tip{padding:6px 10px;border-radius:8px;font-size:12px;line-height:1.5;',
+      '  color:var(--dsw-alias-text-primary,inherit)}',
+      '.dshctn-tip.warn{background:var(--dsw-alias-state-warning-primary,rgba(251,191,36,.12));',
+      '  border:1px solid var(--dsw-alias-state-warning-primary,rgba(251,191,36,.35))}',
+      '.dshctn-tip.bad{background:var(--dsw-alias-state-error-primary,rgba(217,45,32,.1));',
+      '  border:1px solid var(--dsw-alias-state-error-primary,rgba(217,45,32,.32))}',
+      '.dshctn-tip.ok{background:var(--dsw-alias-state-success-primary,rgba(34,160,107,.1));',
+      '  border:1px solid var(--dsw-alias-state-success-primary,rgba(34,160,107,.3))}',
+      // 帧级气泡：shell.overlay 里由宿主负责层级，这里只做外观与定位
+      '.dshctn-float{position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:14000;',
+      '  max-width:min(520px,90vw);padding:8px 14px;border-radius:10px;font-size:13px;',
+      '  line-height:1.5;font-weight:600;box-shadow:0 8px 28px rgba(0,0,0,.28);',
+      '  color:var(--dsw-alias-text-primary,inherit);',
+      '  background:var(--dsw-alias-bg-layer-2,#1f2430);',
+      '  border:1px solid var(--dsw-alias-border-primary,rgba(127,127,127,.3))}',
+      '.dshctn-float.spend{border-color:var(--dsw-alias-state-warning-primary,rgba(251,191,36,.6))}',
+      '.dshctn-float.free{border-color:var(--dsw-alias-state-success-primary,rgba(34,160,107,.6))}',
+      '.dshctn-float.pending{border-color:var(--dsw-alias-state-error-primary,rgba(217,45,32,.5))}',
     ].join('')
 
     let panelCssMounted = false
@@ -1175,6 +1196,150 @@ window.__ModuleLoader__.load({
       // 侧栏行由本 client 半区在每次页面加载时重新注册，本就是稳定入口，
       // 浮层只会制造重复入口，故彻底移除。
       registerSidebarEntry(ctx, namespace)
+      registerCostNotices(ctx)
+    }
+
+    // ======================================================================
+    // 主动提示：用户要的两件事
+    //
+    // 1.「当前模型不是最省钱的」→ 输入框上方常驻条 + 帧级气泡
+    // 2.「本回合消耗多少积分」→ 回合结束后气泡 + 常驻条里的累计
+    //
+    // 实现方式（全部走宿主公开契约，不用 DOM hack）：
+    //   - conversation.input.dock（list）：输入框上方的常驻条，属于当前会话
+    //   - shell.overlay（list）：帧级浮动层，用于回合结束的瞬时气泡
+    // 数据来源是已有的 /cost-tracker/* HTTP 路由，client 定时轮询。
+    // ======================================================================
+
+    /** 轮询间隔：提示要跟手，又不能把 host 打爆 */
+    const NOTICE_POLL_MS = 8000
+
+    /**
+     * 共享数据：一个 poller 产出，两个位点订阅。
+     * ⚠️ 必须是**模块作用域**变量：注册函数返回的组件（CostDockLive /
+     * CostToastLive）在闭包外渲染，读不到 registerCostNotices 的局部变量。
+     * 这一点被运行时测试抓到过：noticeShared 放在函数里时组件永远渲染成空。
+     */
+    let noticeShared = null
+    const noticeListeners = new Set()
+    function subscribeNotices(fn) { noticeListeners.add(fn); return () => noticeListeners.delete(fn) }
+    function notifyNotices() { noticeListeners.forEach((fn) => fn()) }
+
+    /** 注册两个提示位点 */
+    function registerCostNotices(ctx) {
+      ctx.effect(() => {
+        let alive = true
+        const poll = () => {
+          if (!alive) return
+          pFetch('/cost-tracker/ledger').then((j) => {
+            if (!alive || !j) return
+            const lt = j.lastTurn
+            const cur = lt && typeof lt.turn === 'number' ? lt.turn : 0
+            const prev = noticeShared ? noticeShared.lastTurn : 0
+            let toast = null
+            if (cur > 0 && prev > 0 && cur !== prev && lt) {
+              const wb = lt.workbuddy || {}
+              let text
+              let kind = 'info'
+              if (wb.reason === 'unconfirmed' || wb.reason === 'zero-pending') {
+                text = '本轮积分未入账，稍后自动结算'
+                kind = 'pending'
+              } else if (Number(wb.spent) > 0) {
+                text = '本轮消耗 ' + pNum(wb.spent) + ' 积分'
+                if (Number(j.day && j.day.workbuddyCredits) > 0) {
+                  text += '（今天累计 ' + pNum(j.day.workbuddyCredits) + '）'
+                }
+                kind = 'spent'
+              } else if (lt.allFree) {
+                text = '本轮免费，未消耗积分'
+                kind = 'free'
+              }
+              if (text) toast = { key: 'turn-' + cur + '-' + Date.now(), text, kind }
+            }
+            noticeShared = { ledger: j, lastTurn: cur, toast }
+            noticeListeners.forEach((fn) => fn())
+          }).catch(() => {})
+          pFetch('/cost-tracker/recommend').then((j) => {
+            if (!alive || !j || !j.advice) return
+            if (!noticeShared) noticeShared = { ledger: null, lastTurn: 0, toast: null }
+            noticeShared.advice = j.advice
+            noticeListeners.forEach((fn) => fn())
+          }).catch(() => {})
+        }
+        poll()
+        const t = setInterval(poll, NOTICE_POLL_MS)
+        return () => { alive = false; clearInterval(t) }
+      }, 'cost-tracker: notice poller')
+
+      const subscribe = (fn) => { noticeListeners.add(fn); return () => noticeListeners.delete(fn) }
+
+      // 常驻条（输入框上方）
+      ctx.slots.inject('conversation.input.dock', () => {
+        return ctx.slots.register({
+          name: 'conversation.input.dock',
+          id: 'dsh-cost-tracker-notice',
+          order: 50,
+          label: '费用提示',
+        }, () => h(CostDockLive, { subscribe }))
+      })
+
+      // 帧级气泡（回合结束）
+      ctx.slots.inject('shell.overlay', () => {
+        return ctx.slots.register({
+          name: 'shell.overlay',
+          id: 'dsh-cost-tracker-toast',
+          order: 60,
+          label: 'dsh-cost-tracker',
+        }, () => h(CostToastLive, { subscribe }))
+      })
+    }
+
+    /** 订阅共享数据的常驻条 */
+    function CostDockLive(props) {
+      const [, force] = useState(0)
+      useEffect(() => {
+        const off = props.subscribe(() => force((n) => n + 1))
+        return () => { if (typeof off === 'function') off() }
+      }, [props.subscribe])
+      // 共享对象在模块级，这里直接读（subscribe 触发重渲染）
+      if (!noticeShared) return null
+      const advice = noticeShared.advice
+      if (!advice || !advice.message || advice.level === 'ok') return null
+      const cls = advice.level === 'switch' ? 'dshctn-tip bad' : 'dshctn-tip warn'
+      const icon = advice.level === 'switch' ? '⚠ ' : '💡 '
+      const nodes = [h('div', { key: 'adv', className: cls }, icon + advice.message)]
+      if (noticeShared.toast) {
+        const tcls = noticeShared.toast.kind === 'spent' ? 'dshctn-tip warn'
+          : (noticeShared.toast.kind === 'free' ? 'dshctn-tip ok' : 'dshctn-tip bad')
+        nodes.push(h('div', { key: noticeShared.toast.key, className: tcls }, '🧾 ' + noticeShared.toast.text))
+      }
+      return h('div', { className: 'dshctn-dock' }, nodes)
+    }
+
+    /** 订阅共享数据的帧级气泡 */
+    function CostToastLive(props) {
+      const [shown, setShown] = useState(null)
+      const [off, setOff] = useState(false)
+      useEffect(() => {
+        const unsub = props.subscribe(() => {
+          if (noticeShared && noticeShared.toast && (!shown || noticeShared.toast.key !== shown.key)) {
+            setShown(noticeShared.toast)
+            setOff(false)
+          }
+        })
+        return () => { if (typeof unsub === 'function') unsub() }
+      }, [shown])
+      useEffect(() => {
+        if (!shown) return
+        const t = setTimeout(() => setOff(true), 6000)
+        return () => clearTimeout(t)
+      }, [shown])
+      if (!shown || off) return null
+      const cls = shown.kind === 'spent' ? 'dshctn-float spend'
+        : (shown.kind === 'free' ? 'dshctn-float free'
+          : (shown.kind === 'pending' ? 'dshctn-float pending' : 'dshctn-float info'))
+      const icon = shown.kind === 'spent' ? '🧾 ' : (shown.kind === 'free' ? '✓ ' : (shown.kind === 'pending' ? '⏳ ' : 'ℹ '))
+      return h('div', { className: cls, role: 'status' }, icon + shown.text)
     }
 
     /**
