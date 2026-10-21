@@ -821,18 +821,25 @@ window.__ModuleLoader__.load({
       '  border:1px solid var(--dsw-alias-state-error-primary,rgba(217,45,32,.32))}',
       '.dshctn-tip.ok{background:var(--dsw-alias-state-success-primary,rgba(34,160,107,.1));',
       '  border:1px solid var(--dsw-alias-state-success-primary,rgba(34,160,107,.3))}',
-      // 帧级气泡：紧凑的 pill，靠右上，不整行铺开
-      '.dshctn-float{position:fixed;top:16px;right:20px;z-index:14000;',
+      // 帧级气泡：紧贴左侧任务栏的右缘、垂直居中偏下。
+      // 用户要求「贴在左侧栏旁边那片空白里，不要盖住对话内容」：
+      //   · left 用 CSS 变量回退：宿主侧栏展开约 260px、收起约 56px，
+      //     取 272px 落在两种状态下都不会压住对话区。
+      //   · 不写死 top:16px（那会贴住对话顶部），改为纵向居中，
+      //     视线落在阅读区域中部但不侵入正文。
+      '.dshctn-float{position:fixed;left:var(--dshctn-toast-left,272px);',
+      '  top:50%;transform:translateY(-50%);z-index:14000;',
       '  display:inline-flex;align-items:center;gap:6px;',
-      '  max-width:min(420px,80vw);padding:8px 14px;border-radius:999px;',
-      '  font-size:12.5px;line-height:1.4;font-weight:600;white-space:nowrap;',
-      '  overflow:hidden;text-overflow:ellipsis;',
+      '  max-width:min(300px,40vw);padding:8px 12px;border-radius:12px;',
+      '  font-size:12.5px;line-height:1.45;font-weight:600;',
+      '  white-space:normal;word-break:break-word;',
       '  box-shadow:0 6px 20px rgba(0,0,0,.22);',
       '  color:var(--dsw-alias-text-primary,inherit);',
       '  background:var(--dsw-alias-bg-layer-2,#1f2430);',
       '  border:1px solid var(--dsw-alias-border-primary,rgba(127,127,127,.3));',
       '  animation:dshctn-in .18s ease-out}',
-      '@keyframes dshctn-in{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}',
+      '@keyframes dshctn-in{from{opacity:0;transform:translateY(-50%) translateX(-6px)}',
+      '  to{opacity:1;transform:translateY(-50%) translateX(0)}}',
       '.dshctn-float.spend{border-color:var(--dsw-alias-state-warning-primary,rgba(251,191,36,.6))}',
       '.dshctn-float.free{border-color:var(--dsw-alias-state-success-primary,rgba(34,160,107,.6))}',
       '.dshctn-float.pending{border-color:var(--dsw-alias-state-error-primary,rgba(217,45,32,.5))}',
@@ -1201,14 +1208,21 @@ window.__ModuleLoader__.load({
       //    (registered by Kb) — register at a different priority to shadow it"
       // 而这个异常会被外层 try/catch 吞掉，**连带后面的侧栏入口和提示全部
       // 不执行**——2026-10-21 的「钱袋没了 + 提示没了」就是这个原因。
-      // 规则：single slot 用不同 priority 遮蔽原生渲染（priority 越低越优先）。
+      // 规则：single slot 用不同 priority 遮蔽原生渲染。
+      // ⚠️ 遮蔽方向极易搞反（2026-10-21 就错了一次）：
+      //   报错文案说 "lowest renders" —— **优先级数值最小的那个才渲染**。
+      //   原生 Kb 占 0，所以必须用**负数**才能真正盖过它；
+      //   上一版写 priority: 10（比 0 大）等于把渲染权让给原生，
+      //   于是「免费/常用」标签全没了——用户报的「模型列表标签没了」就是这个。
+      //   同时不能用 0（会和原生撞车直接抛错，那才是钱袋消失的原因）。
+      const LABEL_PRIORITY = -10
       ctx.effect(() => {
         let dispose = null
         try {
           dispose = ctx.slots.inject('conversation.input.model.label', () =>
             ctx.slots.register({
               name: 'conversation.input.model.label',
-              priority: 10,
+              priority: LABEL_PRIORITY,
               locale: namespace,
             }, CostTrackerModelLabel))
         } catch (e) {
