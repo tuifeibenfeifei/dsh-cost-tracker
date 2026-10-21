@@ -802,6 +802,14 @@ window.__ModuleLoader__.load({
       '  padding:9px 11px;border-radius:8px;',
       '  background:var(--dsw-alias-bg-layer-1,rgba(127,127,127,.05));',
       '  border:1px solid var(--dsw-alias-border-primary,rgba(127,127,127,.14))}',
+      // 模型清单里的一行：更紧凑，不要每行都像卡片
+      '.dshctp-mrow.tight{grid-template-columns:1fr;gap:0;padding:6px 9px;margin-bottom:3px;',
+      '  background:transparent;border:none;',
+      '  border-bottom:1px solid var(--dsw-alias-border-primary,rgba(127,127,127,.1))}',
+      '.dshctp-group{margin-bottom:14px}',
+      '.dshctp-grouphd{display:flex;align-items:center;gap:6px;margin-bottom:6px;',
+      '  padding-bottom:4px;border-bottom:1px solid var(--dsw-alias-border-primary,rgba(127,127,127,.18))}',
+      '.dshctp-dot2{width:8px;height:8px;border-radius:50%;flex:none}',
       '.dshctp-mname{font-weight:700;word-break:break-all}',
       '.dshctp-mmeta{font-size:11px;color:var(--dsw-alias-text-secondary,#9ca3af);margin-top:2px}',
       '.dshctp-mnote{font-size:11px;margin-top:5px;white-space:pre-wrap;',
@@ -1009,7 +1017,6 @@ window.__ModuleLoader__.load({
       const wb = summary && summary.workbuddy
       const ranked = (models && models.ranked) || []
       const notes = (models && models.modelNotes) || {}
-      const usageMap = usage || {}
 
       const kv = (k, v, cls) => h('div', { key: k, className: 'dshctp-kv' }, [
         h('span', { key: 'k', className: 'k' }, k),
@@ -1120,52 +1127,8 @@ window.__ModuleLoader__.load({
         // ---- 主动建议 ----
         h(RecoTip, { key: 'adv' }),
 
-        // ---- 模型清单 + 信息编辑 ----
-        h('div', { key: 'm', className: 'dshctp-card' }, [
-          h('h3', { key: 'h' }, 'WorkBuddy 模型'),
-          h('div', { key: 'list', className: 'dshctp-models' },
-            ranked.map((m) => {
-              const u = usageMap[m.id]
-              const lim = (limits || {})[m.id]
-              const exhausted = !!(lim && (lim.quotaExhaustedAt || lim.creditExhaustedAt))
-              const pills = []
-              if (m.free) pills.push({ t: '免费', c: '#15803d' })
-              if (lim && lim.rateLimited) pills.push({ t: '限流', c: '#b91c1c' })
-              if (exhausted) pills.push({ t: lim.creditExhaustedAt ? '欠费' : '额度尽', c: '#b91c1c' })
-              const rate = m.credits && String(m.credits).trim() && !/^x?0(\.0+)?$/i.test(String(m.credits).trim())
-                ? String(m.credits).trim() : ''
-              return h('div', { key: m.id, className: 'dshctp-mrow' }, [
-                h('div', { key: 'l' }, [
-                  h('div', { key: 'n', className: 'dshctp-mname' }, [
-                    ...pills.map((p, i) => h('span', {
-                      key: 'p' + i,
-                      className: 'dshctp-pill',
-                      style: { background: p.c },
-                    }, p.t)),
-                    String(m.name || m.id),
-                  ]),
-                  h('div', { key: 'meta', className: 'dshctp-mmeta' }, [
-                    m.free ? '免费' : (rate ? rate + ' 倍率' : '倍率未知'),
-                    m.contextWindow ? ' · 上下文 ' + pTokens(m.contextWindow) : '',
-                    (m.badges && m.badges.length) ? ' · ' + m.badges.join(' · ') : '',
-                    u ? ' · 你已用 ' + u.turns + ' 轮'
-                      + (u.credits > 0 ? ' · ' + pNum(u.credits) + ' 积分' : '')
-                      + (u.cost > 0 ? ' · ¥' + pNum(u.cost) : '') : '',
-                  ].join('')),
-                  notes[m.id]
-                    ? h('div', { key: 'note', className: 'dshctp-mnote' }, notes[m.id])
-                    : null,
-                ]),
-                h('button', {
-                  key: 'b',
-                  className: 'dshctp-btn',
-                  type: 'button',
-                  onClick: () => setPick(m.id),
-                }, '编辑信息'),
-              ])
-            }),
-          ),
-        ]),
+        // ---- 全平台模型清单（按平台分组，没用过的折叠）----
+        h(AllModelsCard, { key: 'allmodels' }),
 
         // ---- 模型信息编辑器 ----
         h('div', { key: 'e', className: 'dshctp-card' }, [
@@ -1516,6 +1479,100 @@ window.__ModuleLoader__.load({
         nodes.push(h('div', { key: noticeShared.toast.key, className: tcls }, '🧾 ' + noticeShared.toast.text))
       }
       return h('div', { className: 'dshctn-dock' }, nodes)
+    }
+
+    /**
+     * 全平台模型清单：按平台分组，**没用过的默认折叠**。
+     *
+     * 用户要求：「把其他 API 的也弄进去，包括阿里云的、deepseek 官方的，
+     * 然后在分类里面，把没用的模型整理起来不展开显示，如果有需要再展开」。
+     *
+     * 为什么必须折叠：阿里云一家就 54 个模型，其中只有 2 个用过；
+     * 全展开会把「用过的」淹没在几十条无关项里。
+     */
+    function AllModelsCard() {
+      const [data, setData] = useState(null)
+      const [open, setOpen] = useState({})
+
+      useEffect(() => {
+        let alive = true
+        const load = () => {
+          pFetch('/cost-tracker/all-models').then((j) => {
+            if (alive && j && j.ok) setData(j.groups || [])
+          }).catch(() => {})
+        }
+        load()
+        const t = setInterval(load, 60000)
+        return () => { alive = false; clearInterval(t) }
+      }, [])
+
+      if (!data) {
+        return h('div', { className: 'dshctp-card' }, [
+          h('h3', { key: 'h' }, '模型清单'),
+          h('div', { key: 'l', className: 'dshctp-hint' }, '加载中…'),
+        ])
+      }
+
+      const PLAT_COLOR = { aliyun: '#0369a1', deepseek: '#4f46e5', workbuddy: '#15803d' }
+
+      const rowOf = (m) => {
+        const pills = []
+        if (m.free) pills.push({ t: '免费', c: '#15803d' })
+        if (Number(m.usedTurns) > 0) pills.push({ t: '用过', c: '#6b7280' })
+        const meta = []
+        if (m.credits) meta.push(String(m.credits) + ' 倍率')
+        if (m.contextWindow) meta.push('上下文 ' + pTokens(m.contextWindow))
+        if (m.badges && m.badges.length) meta.push(m.badges.join(' · '))
+        if (Number(m.usedTurns) > 0) meta.push('已用 ' + m.usedTurns + ' 轮')
+        if (Number(m.usedCost) > 0) meta.push('¥' + pNum(m.usedCost))
+        return h('div', { key: m.id + '@' + (m.provider || ''), className: 'dshctp-mrow tight' }, [
+          h('div', { key: 'l' }, [
+            h('div', { key: 'n', className: 'dshctp-mname' }, [
+              ...pills.map((p, i) => h('span', {
+                key: 'p' + i, className: 'dshctp-pill', style: { background: p.c },
+              }, p.t)),
+              String(m.name || m.id),
+            ]),
+            meta.length ? h('div', { key: 'meta', className: 'dshctp-mmeta' }, meta.join(' · ')) : null,
+          ]),
+        ])
+      }
+
+      return h('div', { className: 'dshctp-card' }, [
+        h('h3', { key: 'h' }, '模型清单'),
+        h('div', { key: 'hint', className: 'dshctp-hint', style: { marginBottom: '8px' } },
+          '按平台分组；没用过的模型默认收起，需要时点「展开」。'),
+        ...data.map((g) => {
+          const used = g.models.filter((m) => Number(m.usedTurns) > 0)
+          const unused = g.models.filter((m) => !(Number(m.usedTurns) > 0))
+          const isOpen = open[g.platform] === true
+          return h('div', { key: g.platform, className: 'dshctp-group' }, [
+            h('div', { key: 't', className: 'dshctp-grouphd' }, [
+              h('span', {
+                key: 'dot',
+                className: 'dshctp-dot2',
+                style: { background: PLAT_COLOR[g.platform] || '#6b7280' },
+              }),
+              h('span', { key: 'n', style: { fontWeight: 700 } }, g.title),
+              h('span', { key: 'c', className: 'dshctp-hint', style: { marginLeft: '6px' } },
+                g.models.length + ' 个 · 用过 ' + used.length),
+            ]),
+            h('div', { key: 'used' }, used.map(rowOf)),
+            unused.length
+              ? h('div', { key: 'unused' }, [
+                h('button', {
+                  key: 'toggle',
+                  type: 'button',
+                  className: 'dshctp-btn',
+                  style: { marginTop: '4px' },
+                  onClick: () => setOpen((s) => ({ ...s, [g.platform]: !isOpen })),
+                }, isOpen ? '▾ 收起 ' + unused.length + ' 个未使用' : '▸ 展开 ' + unused.length + ' 个未使用'),
+                isOpen ? h('div', { key: 'list', style: { marginTop: '4px' } }, unused.map(rowOf)) : null,
+              ])
+              : null,
+          ])
+        }),
+      ])
     }
 
     /** 订阅共享数据的帧级气泡：按设置的位置/尺寸显示，按时长自动消失（0=常驻） */
