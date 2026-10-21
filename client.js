@@ -1723,7 +1723,9 @@ window.__ModuleLoader__.load({
         x: pref.custom.x,
         y: pref.custom.y,
         width: pref.custom.width,
-        height: pref.custom.height > 0 ? pref.custom.height : 120,
+        // 高度 0 = 完全由内容决定：预览也要保持 0（不再兜底 120，
+        // 否则高度永远锁在 120，用户设的「自适应」等于没生效）。
+        height: pref.custom.height > 0 ? pref.custom.height : 0,
       }
 
       // 统一开始拖拽：mode 为 'move' 或四角之一 'nw'/'ne'/'sw'/'se'
@@ -1813,24 +1815,24 @@ window.__ModuleLoader__.load({
 
       // 预览外观与真实气泡保持一致（同一套圆角/底色/边框/阴影/字号规则），
       // 只在外面加一圈虚线定位框和四个抓手，这样「拖出来的样子 = 最终样子」。
-      // 字号规则必须与 toastStyle() 一致：以 pref.fontPx（数值）或宿主会话
-      // 字体为基准，而不是写死 12.5px —— 否则预览和真实气泡会不一致。
+      // ⚠️ 字号规则必须与 toastStyle() 一致：**固定字号**（fontPx 或宿主字体），
+      // 不再按宽高缩放；高度同样用 min-height 让内容自适应。
       const baseFont = pref.fontPx > 0 ? pref.fontPx : readHostFontSize()
-      const fit = pref.autoFit
-        ? (() => {
-          const fs = Math.min(32, Math.max(baseFont, Math.round(cur.width / 24)))
-          const padX = Math.max(8, Math.min(24, Math.round(cur.width / 20)))
-          const padY = Math.max(5, Math.min(18, Math.round(fs * 0.7)))
-          return { fontSize: fs + 'px', padding: padY + 'px ' + padX + 'px', lineHeight: 1.45 }
-        })()
-        : { fontSize: baseFont + 'px', padding: '8px 12px', lineHeight: 1.45 }
+      const fit = (() => {
+        const padX = Math.max(8, Math.min(24, Math.round(cur.width / 20)))
+        const padY = Math.max(5, Math.min(18, Math.round(baseFont * 0.7)))
+        return { fontSize: baseFont + 'px', padding: padY + 'px ' + padX + 'px', lineHeight: 1.45 }
+      })()
 
       const style = {
         position: 'fixed',
         left: cur.x + 'px',
         top: cur.y + 'px',
         width: cur.width + 'px',
-        height: cur.height + 'px',
+        // 与真实气泡一致：高度用 min-height（内容少时保持拖出的高度，
+        // 内容多时自动增高），而不是写死 height。
+        // 高度 0 表示完全由内容决定 → 不设 minHeight，避免塌成一条线。
+        minHeight: cur.height > 0 ? cur.height + 'px' : undefined,
         boxSizing: 'border-box',
         zIndex: 13500,
         display: 'flex',
@@ -1850,8 +1852,8 @@ window.__ModuleLoader__.load({
         // 预览文案用 \n 分行，需要 pre-line 才生效
         whiteSpace: 'pre-line',
         textAlign: 'left',
-        // 内容超长时可滚（而不是裁掉）
-        overflowY: 'auto',
+        // min-height 方案下内容超高就增高，不需要滚动
+        overflowY: 'visible',
         overflowX: 'hidden',
         ...fit,
       }
@@ -1925,7 +1927,7 @@ window.__ModuleLoader__.load({
       durationMs: 6000,   // 停留时长
       // 自定义模式：位置（px，距视口左上）与宽高（px）
       custom: { x: 280, y: 0, width: 300, height: 0 },
-      autoFit: true,      // 字号随气泡尺寸自适应
+      autoFit: false,     // 已废弃：字号不再随尺寸缩放（保留字段兼容旧配置）
       fontPx: 0,          // 气泡字号（px）；0 = 跟随 DSH 会话字体
       editing: false,     // 是否常驻显示可拖动预览（用户手动开关）
       dockAdvice: false,  // 是否在输入框上方常驻一条建议（默认关：建议已并入气泡）
@@ -2020,11 +2022,11 @@ window.__ModuleLoader__.load({
     /**
      * 把偏好翻译成内联样式。
      *
-     * 字号与排版的自适应规则（autoFit=true 时生效）：
-     *   气泡按「宽×高」给出一个面积，字号随宽度分档变化，
-     *   同时根据高度决定文本是单行省略还是换行铺满 —— 这样用户把气泡
-     *   拉大后字也跟着变大，而不是留一大片空白围着两行小字。
-     *   height=0 表示高度自适应（不锁死），此时按宽度定字号。
+     * 尺寸语义（2026-10-22 按用户要求重定，不再有 autoFit 缩放）：
+     *   · 宽度：固定 = 你拖出来的横向尺寸
+     *   · 高度：用 min-height，内容少时保持拖动高度，内容多时自动增高
+     *   · 字号：固定 = pref.fontPx（数值）或宿主会话字体，绝不随宽高变化
+     * 这样「一行字的气泡」不会撑成一整块空白，长文案也不会被裁掉或居中裁半。
      */
     function toastStyle(pref) {
       const p = pref.position || 'left'
@@ -2056,30 +2058,24 @@ window.__ModuleLoader__.load({
         normal: { padding: '8px 12px', maxWidth: 300 },
         large: { padding: '12px 16px', maxWidth: 420 },
       }
-      // ⚠️ 默认字号跟 DSH 会话字体一致，不再写死 12.5px。
-      // 用户实测反馈「字体太小」：会话正文用的是更大的字号，气泡写死
-      // 12.5px 就显得突兀。这里读宿主主题令牌 --dsw-alias-font-size
-      // （读不到时兜底 14px），并允许用户用数值精确覆盖。
-      let fontSize = pref.fontPx > 0 ? pref.fontPx : readHostFontSize()
+      // ⚠️ 字号固定：要么用户设的数值，要么跟随宿主会话字体。
+      // **不再按宽/高缩放**（旧的 autoFit 是 width/24 算字号）。
+      // 用户明确要求：横向距离（宽度）由拖动确定，纵向随内容自适应；
+      // 字号不该跟着气泡大小变，否则调大框反而字变小/变大，很难用。
+      const fontSize = pref.fontPx > 0 ? pref.fontPx : readHostFontSize()
       let padding = '8px 12px'
       let width = null
-      let height = null
+      let minHeight = null
 
       if (pref.size === 'custom' || p === 'custom') {
+        // 宽度固定（用户拖出来的横向尺寸）
         width = custom.width
-        height = custom.height > 0 ? custom.height : null
-        if (pref.autoFit) {
-          // 自动模式：字号随宽度缩放，但**以用户设定的 fontPx 为基准**
-          // （不再从固定的 12.5 起算），这样调大字号后拖宽气泡不会缩回去。
-          fontSize = Math.max(
-            Math.min(32, Math.round(pref.fontPx > 0 ? pref.fontPx : FONT_FALLBACK)),
-            Math.min(32, Math.round(width / 24)),
-          )
-          // 内边距也按比例走，窄气泡不至于被 padding 吃光
-          const padX = Math.max(8, Math.min(24, Math.round(width / 20)))
-          const padY = Math.max(5, Math.min(18, Math.round(fontSize * 0.7)))
-          padding = padY + 'px ' + padX + 'px'
-        }
+        // 高度改为「最小高度」：内容少时保持拖动的高度，
+        // 内容多时自动向下增高，不再裁掉、也不再居中。
+        minHeight = custom.height > 0 ? custom.height : null
+        const padX = Math.max(8, Math.min(24, Math.round(width / 20)))
+        const padY = Math.max(5, Math.min(18, Math.round(fontSize * 0.7)))
+        padding = padY + 'px ' + padX + 'px'
       } else {
         // 预设只决定「内边距与最大宽度」，字号统一由
         // pref.fontPx（用户数值）或宿主会话字体决定 —— 不再按档位写死。
@@ -2096,23 +2092,20 @@ window.__ModuleLoader__.load({
         width: width ? width + 'px' : undefined,
         boxSizing: 'border-box',
       }
-      if (height) {
-        out.height = height + 'px'
-        // ⚠️ 从顶部排版（flex-start），不要 center。
-        // 固定高度下 center 会把多行文本垂直居中，一旦内容超高就上下同时
-        // 被裁——用户抱怨「信息不全」正是这个原因。顶部起排 + 可滚动，
-        // 才能先看到开头再滚着看完。
-        out.overflowY = 'auto'
+      if (minHeight) {
+        // ⚠️ 用 min-height 而不是 height：
+        // 内容少 → 保持你拖的高度；内容多 → 自动向下增高，不被裁。
+        // 用户要的就是「横向固定、纵向随内容自适应」。
+        out.minHeight = minHeight + 'px'
+        // 不再固定高度，因此不需要滚动条（增高即可容纳）
+        out.overflowY = 'visible'
         out.overflowX = 'hidden'
+        // 从顶部起排：先看到第一行，再往下是建议
         out.alignItems = 'flex-start'
       }
-      // 自定义高度足够高时允许换行（否则一行省略很浪费空间）
-      if (height && height >= fontSize * 2.6) {
-        out.whiteSpace = 'normal'
-        out.textAlign = 'left'
-      } else {
-        out.whiteSpace = 'normal'
-      }
+      // 始终允许换行 + 左对齐（宽度固定，长文案自然折行）
+      out.whiteSpace = 'normal'
+      out.textAlign = 'left'
       return out
     }
 
@@ -2178,7 +2171,10 @@ window.__ModuleLoader__.load({
         // 拖动预览开关：预览是常驻浮层，切到对话也能看到，便于边看边调
         h('div', { key: 'drag', className: 'dshctp-custom' }, [
           h('div', { key: 't', className: 'dshctp-hint' },
-            '拖动气泡移动位置，拖四个角改变大小（松手即保存）'),
+            '拖动气泡移动位置；拖左右两侧决定宽度，高度随内容自动增高'),
+          h('div', { key: 'rule', className: 'dshctp-hint', style: { marginTop: '2px', opacity: 0.8 } },
+            '宽度 = 你拖出来的固定值；高度 = 拖出来的高度作为最小值，'
+            + '文案变长时自动向下增高，不会裁掉或被压成一行空白。'),
           h('div', { key: 'act', className: 'dshctp-actions', style: { justifyContent: 'flex-start', marginTop: '6px' } }, [
             h('button', {
               key: 'on',
@@ -2195,13 +2191,10 @@ window.__ModuleLoader__.load({
               + '10 秒无操作自动关闭。'),
         ]),
 
-        // 自适应字号
-        h('div', { key: 'af', style: { marginTop: '6px' } }, [
-          chip(pref.autoFit ? '✓ 字号随尺寸自适应' : '字号随尺寸自适应',
-            pref.autoFit,
-            () => writeToastPref({ autoFit: !pref.autoFit }),
-            'autofit'),
-        ]),
+        // ⚠️ 「字号随尺寸自适应」开关已移除。
+        // 用户明确要求去掉按宽高缩放字号的做法：横向（宽度）由拖动决定，
+        // 纵向随内容自适应，字号保持固定（fontPx 或会话字体）。
+        // 因此这里不再渲染 autoFit 开关。
 
         // 建议的显示位置：默认并进气泡（不在输入框上方另开一条）
         h('div', { key: 'dk', className: 'dshctp-hint', style: { margin: '6px 0 2px' } }, '省钱建议'),
