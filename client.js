@@ -1188,14 +1188,19 @@ window.__ModuleLoader__.load({
         // ---- 气泡外观设置 ----
         h(ToastPrefsCard, { key: 'toastprefs' }),
         ]),
-        // 拖动预览挂在 root 上（不随内容滚动），自定义模式下才显示
-        h(ToastDragPreviewHost, { key: 'dragpreview' }),
       ])
     }
 
     /**
-     * 拖动预览的挂载点：只在用户选了「自定义」时渲染。
-     * 订阅偏好变化，切到自定义的瞬间预览气泡就出现。
+     * 拖动预览的常驻位点（注册在 shell.overlay）。
+     *
+     * ⚠️ 为什么必须放 shell.overlay 而不是面板内：
+     * 用户要「一边看对话一边调位置」，而费用面板会占满主区域、看不到对话。
+     * shell.overlay 是宿主提供的**帧级浮动层**（渲染在所有列之上、独立于
+     * 各列的滚动容器），注册进去后切到任何面板——包括对话——预览都还在，
+     * 这样才谈得上「看着对话确定位置」。
+     *
+     * 只在用户选过「自定义」之后才显示，避免平时多一个碍事的框。
      */
     function ToastDragPreviewHost() {
       const [pref, setPref] = useState(() => readToastPref())
@@ -1204,8 +1209,8 @@ window.__ModuleLoader__.load({
         toastPrefListeners.add(fn)
         return () => { toastPrefListeners.delete(fn) }
       }, [])
-      const isCustom = pref.position === 'custom' || pref.size === 'custom'
-      if (!isCustom) return null
+      // 显式开关：用户可能只想用预设，不希望页面上老浮着一个框
+      if (pref.editing !== true) return null
       return h(ToastDragPreview)
     }
 
@@ -1455,6 +1460,24 @@ window.__ModuleLoader__.load({
           return () => {}
         }
       })
+
+      // 拖动预览也挂在 shell.overlay：切换面板（包括回到对话）时它都还在，
+      // 用户才能「看着对话调位置」。独立 id，与上面的瞬时气泡互不干扰。
+      ctx.slots.inject('shell.overlay', () => {
+        try {
+          const off = ctx.slots.register({
+            name: 'shell.overlay',
+            id: 'dsh-cost-tracker-dragpreview',
+            order: 55,
+            label: 'dsh-cost-tracker 拖动预览',
+          }, () => h(ToastDragPreviewHost))
+          diag.dragPreview = 'registered'
+          return off
+        } catch (e) {
+          diag.dragPreview = 'failed: ' + (e && e.message ? e.message : String(e))
+          return () => {}
+        }
+      })
     }
 
     /** 订阅共享数据的常驻条 */
@@ -1631,7 +1654,17 @@ window.__ModuleLoader__.load({
         window.addEventListener('pointercancel', onUp)
       }
 
-      // 预览用与真实气泡相同的字号自适应规则，所见即所得
+      // 预览外观与真实气泡保持一致（同一套圆角/底色/边框/阴影/字号规则），
+      // 只在外面加一圈虚线定位框和四个抓手，这样「拖出来的样子 = 最终样子」。
+      const fit = pref.autoFit
+        ? (() => {
+          const fs = Math.max(10, Math.min(24, Math.round(cur.width / 24)))
+          const padX = Math.max(8, Math.min(24, Math.round(cur.width / 20)))
+          const padY = Math.max(5, Math.min(18, Math.round(fs * 0.7)))
+          return { fontSize: fs + 'px', padding: padY + 'px ' + padX + 'px', lineHeight: 1.45 }
+        })()
+        : { fontSize: '12.5px', padding: '8px 12px', lineHeight: 1.45 }
+
       const style = {
         position: 'fixed',
         left: cur.x + 'px',
@@ -1647,51 +1680,64 @@ window.__ModuleLoader__.load({
         cursor: active ? 'grabbing' : 'grab',
         userSelect: 'none',
         touchAction: 'none',
+        // 与真实气泡完全相同的配色，所见即所得
         color: 'var(--dsw-alias-text-primary,inherit)',
         background: 'var(--dsw-alias-bg-layer-2,#1f2430)',
-        border: '1px dashed var(--dsw-alias-state-success-primary,#22a06b)',
-        boxShadow: '0 8px 24px rgba(0,0,0,.28)',
-        overflow: 'auto',
-        ...(pref.autoFit
-          ? (() => {
-            const fs = Math.max(10, Math.min(24, Math.round(cur.width / 24)))
-            const padX = Math.max(8, Math.min(24, Math.round(cur.width / 20)))
-            const padY = Math.max(5, Math.min(18, Math.round(fs * 0.7)))
-            return { fontSize: fs + 'px', padding: padY + 'px ' + padX + 'px', lineHeight: 1.45 }
-          })()
-          : { fontSize: '12.5px', padding: '8px 12px', lineHeight: 1.45 }),
+        border: '1px solid var(--dsw-alias-state-success-primary,#22a06b)',
+        boxShadow: '0 6px 20px rgba(0,0,0,.28)',
+        overflow: 'hidden',
+        ...fit,
       }
 
-      // 四个角的抓手
+      // 定位框：贴在外层，用伪元素感的虚线描边标出可拖边界，
+      // 但不影响气泡本身的观感
+      const frameStyle = {
+        position: 'fixed',
+        left: (cur.x - 6) + 'px',
+        top: (cur.y - 6) + 'px',
+        width: (cur.width + 12) + 'px',
+        height: (cur.height + 12) + 'px',
+        boxSizing: 'border-box',
+        zIndex: 13499,
+        border: '1px dashed var(--dsw-alias-state-success-primary,#22a06b)',
+        borderRadius: '16px',
+        pointerEvents: 'none',
+        opacity: active ? 0.95 : 0.55,
+      }
+
+      // 四角抓手：小圆点，hover 变实心，不抢视觉
       const handle = (corner, cursor, css) => h('div', {
         key: corner,
         onPointerDown: startDrag(corner),
         style: {
           position: 'absolute',
-          width: '14px',
-          height: '14px',
+          width: '11px',
+          height: '11px',
           cursor,
-          background: 'var(--dsw-alias-state-success-primary,#22a06b)',
-          borderRadius: '3px',
-          opacity: 0.85,
+          background: 'var(--dsw-alias-bg-layer-1,#fff)',
+          border: '2px solid var(--dsw-alias-state-success-primary,#22a06b)',
+          borderRadius: '50%',
+          boxShadow: '0 1px 3px rgba(0,0,0,.3)',
           touchAction: 'none',
+          zIndex: 1,
           ...css,
         },
         title: '拖动改变大小',
       })
 
-      return h('div', { style: { position: 'relative' } }, [
+      return h('div', null, [
+        h('div', { key: 'frame', style: frameStyle }),
         h('div', {
           key: 'preview',
           style,
           onPointerDown: startDrag('move'),
           title: '拖动移动位置',
         }, [
-          h('span', { key: 't' }, '🧾 本轮消耗 12 积分（拖动我）'),
-          handle('nw', 'nwse-resize', { left: '-7px', top: '-7px' }),
-          handle('ne', 'nesw-resize', { right: '-7px', top: '-7px' }),
-          handle('sw', 'nesw-resize', { left: '-7px', bottom: '-7px' }),
-          handle('se', 'nwse-resize', { right: '-7px', bottom: '-7px' }),
+          h('span', { key: 't', style: { flex: 1, minWidth: 0 } }, '🧾 本轮消耗 12 积分'),
+          handle('nw', 'nwse-resize', { left: '-5px', top: '-5px' }),
+          handle('ne', 'nesw-resize', { right: '-5px', top: '-5px' }),
+          handle('sw', 'nesw-resize', { left: '-5px', bottom: '-5px' }),
+          handle('se', 'nwse-resize', { right: '-5px', bottom: '-5px' }),
         ]),
       ])
     }
@@ -1712,6 +1758,7 @@ window.__ModuleLoader__.load({
       // 自定义模式：位置（px，距视口左上）与宽高（px）
       custom: { x: 280, y: 0, width: 300, height: 0 },
       autoFit: true,      // 字号随气泡尺寸自适应
+      editing: false,     // 是否常驻显示可拖动预览（用户手动开关）
     }
     let toastPref = null
     const toastPrefListeners = new Set()
@@ -1735,6 +1782,7 @@ window.__ModuleLoader__.load({
             if (typeof o.size === 'string') v.size = o.size
             if (Number(o.durationMs) >= 0) v.durationMs = Number(o.durationMs)
             if (typeof o.autoFit === 'boolean') v.autoFit = o.autoFit
+            if (typeof o.editing === 'boolean') v.editing = o.editing
             if (o.custom && typeof o.custom === 'object') {
               // 越界值一律夹回合法区间：手改 localStorage 或旧版本数据都不能
               // 让气泡飞到屏幕外（那样用户会以为插件坏了，却无从恢复）
@@ -1877,8 +1925,6 @@ window.__ModuleLoader__.load({
 
       const c = pref.custom
 
-      // 当前几何值（只读展示，方便核对；真正改尺寸靠拖动）
-      const isCustom = pref.position === 'custom' || pref.size === 'custom'
       return h('div', { className: 'dshctp-card' }, [
         h('h3', { key: 'h' }, '气泡提示'),
 
@@ -1890,7 +1936,7 @@ window.__ModuleLoader__.load({
         h('div', { key: 'sv' }, sizes.map(([v, label]) =>
           chip(label, pref.size === v, () => writeToastPref({ size: v }), 'size-' + v))),
 
-        // 拖动预览：所见即所得，替代原先四个数字输入框
+        // 拖动预览开关：预览是常驻浮层，切到对话也能看到，便于边看边调
         h('div', { key: 'drag', className: 'dshctp-custom' }, [
           h('div', { key: 't', className: 'dshctp-hint' },
             '拖动气泡移动位置，拖四个角改变大小（松手即保存）'),
@@ -1898,14 +1944,14 @@ window.__ModuleLoader__.load({
             h('button', {
               key: 'on',
               type: 'button',
-              className: 'dshctp-btn' + (isCustom ? ' primary' : ''),
-              onClick: () => writeToastPref({ position: 'custom', size: 'custom' }),
-            }, isCustom ? '✓ 拖动预览已开启' : '开启拖动预览'),
+              className: 'dshctp-btn' + (pref.editing ? ' primary' : ''),
+              onClick: () => writeToastPref({ editing: !pref.editing }),
+            }, pref.editing ? '✓ 预览已常驻，点此关闭' : '① 开启拖动预览'),
           ]),
           h('div', { key: 'hint', className: 'dshctp-hint', style: { marginTop: '2px', opacity: 0.8 } },
-            isCustom
-              ? '页面上已出现可拖动的预览气泡，拖好后它就是真实提示的位置与大小。'
-              : '点上面的按钮后，页面上会出现一个可拖动的预览气泡。'),
+            pref.editing
+              ? '预览气泡已浮在页面上，切到对话界面它也还在——边看对话边拖，位置才准。'
+              : '开启后预览气泡会浮在整个页面上（不只在费用面板），切到对话也能看到。'),
         ]),
 
         // 自适应字号
