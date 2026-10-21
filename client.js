@@ -821,25 +821,17 @@ window.__ModuleLoader__.load({
       '  border:1px solid var(--dsw-alias-state-error-primary,rgba(217,45,32,.32))}',
       '.dshctn-tip.ok{background:var(--dsw-alias-state-success-primary,rgba(34,160,107,.1));',
       '  border:1px solid var(--dsw-alias-state-success-primary,rgba(34,160,107,.3))}',
-      // 帧级气泡：紧贴左侧任务栏的右缘、垂直居中偏下。
-      // 用户要求「贴在左侧栏旁边那片空白里，不要盖住对话内容」：
-      //   · left 用 CSS 变量回退：宿主侧栏展开约 260px、收起约 56px，
-      //     取 272px 落在两种状态下都不会压住对话区。
-      //   · 不写死 top:16px（那会贴住对话顶部），改为纵向居中，
-      //     视线落在阅读区域中部但不侵入正文。
-      '.dshctn-float{position:fixed;left:var(--dshctn-toast-left,272px);',
-      '  top:50%;transform:translateY(-50%);z-index:14000;',
-      '  display:inline-flex;align-items:center;gap:6px;',
-      '  max-width:min(300px,40vw);padding:8px 12px;border-radius:12px;',
-      '  font-size:12.5px;line-height:1.45;font-weight:600;',
+      // 帧级气泡：位置/尺寸由 toastStyle() 以**内联样式**下发（用户可配），
+      // 这里只留与位置无关的外观，避免两处 left/top 打架。
+      '.dshctn-float{display:inline-flex;align-items:center;gap:6px;',
+      '  border-radius:12px;line-height:1.45;font-weight:600;',
       '  white-space:normal;word-break:break-word;',
       '  box-shadow:0 6px 20px rgba(0,0,0,.22);',
       '  color:var(--dsw-alias-text-primary,inherit);',
       '  background:var(--dsw-alias-bg-layer-2,#1f2430);',
       '  border:1px solid var(--dsw-alias-border-primary,rgba(127,127,127,.3));',
       '  animation:dshctn-in .18s ease-out}',
-      '@keyframes dshctn-in{from{opacity:0;transform:translateY(-50%) translateX(-6px)}',
-      '  to{opacity:1;transform:translateY(-50%) translateX(0)}}',
+      '@keyframes dshctn-in{from{opacity:0}to{opacity:1}}',
       '.dshctn-float.spend{border-color:var(--dsw-alias-state-warning-primary,rgba(251,191,36,.6))}',
       '.dshctn-float.free{border-color:var(--dsw-alias-state-success-primary,rgba(34,160,107,.6))}',
       '.dshctn-float.pending{border-color:var(--dsw-alias-state-error-primary,rgba(217,45,32,.5))}',
@@ -1155,6 +1147,9 @@ window.__ModuleLoader__.load({
               + '清空并保存可恢复内置公告。'),
           ]),
         ]),
+
+        // ---- 气泡外观设置 ----
+        h(ToastPrefsCard, { key: 'toastprefs' }),
       ])
     }
 
@@ -1428,10 +1423,17 @@ window.__ModuleLoader__.load({
       return h('div', { className: 'dshctn-dock' }, nodes)
     }
 
-    /** 订阅共享数据的帧级气泡 */
+    /** 订阅共享数据的帧级气泡：按设置的位置/尺寸显示，按时长自动消失（0=常驻） */
     function CostToastLive(props) {
       const [shown, setShown] = useState(null)
       const [off, setOff] = useState(false)
+      // 订阅设置变化：用户在面板里改完，下一个气泡立刻按新样式出现
+      const [pref, setPref] = useState(() => readToastPref())
+      useEffect(() => {
+        const fn = (next) => setPref({ ...next })
+        toastPrefListeners.add(fn)
+        return () => { toastPrefListeners.delete(fn) }
+      }, [])
       useEffect(() => {
         const unsub = props.subscribe(() => {
           if (noticeShared && noticeShared.toast && (!shown || noticeShared.toast.key !== shown.key)) {
@@ -1443,15 +1445,132 @@ window.__ModuleLoader__.load({
       }, [shown])
       useEffect(() => {
         if (!shown) return
-        const t = setTimeout(() => setOff(true), 6000)
+        // durationMs === 0 → 常驻，不自动消失（下一条消息到来时才替换）
+        if (!(Number(pref.durationMs) > 0)) return
+        const t = setTimeout(() => setOff(true), Number(pref.durationMs))
         return () => clearTimeout(t)
-      }, [shown])
+      }, [shown, pref.durationMs])
       if (!shown || off) return null
       const cls = shown.kind === 'spent' ? 'dshctn-float spend'
         : (shown.kind === 'free' ? 'dshctn-float free'
           : (shown.kind === 'pending' ? 'dshctn-float pending' : 'dshctn-float info'))
       const icon = shown.kind === 'spent' ? '🧾 ' : (shown.kind === 'free' ? '✓ ' : (shown.kind === 'pending' ? '⏳ ' : 'ℹ '))
-      return h('div', { className: cls, role: 'status' }, icon + shown.text)
+      // 位置与尺寸走内联样式，覆盖 CSS 默认的 left/top，避免两处打架
+      return h('div', { className: cls, role: 'status', style: toastStyle(pref) }, icon + shown.text)
+    }
+
+    /**
+     * 气泡外观设置（持久化到 localStorage）。
+     *
+     * 为什么要可配置：气泡固定在某个屏幕位置，而每个人的侧栏宽度、显示器
+     * 尺寸、缩放比例都不同，写死的坐标对别人可能正好压在对话区上。
+     * 提供「位置预设 + 尺寸 + 停留时长」三个开关，比让用户自己改 CSS 现实。
+     *
+     * 存储键独立于宿主，卸载插件不影响宿主任何数据；读失败一律退回默认值。
+     */
+    const TOAST_PREF_KEY = 'dsh-cost-tracker:toast-pref'
+    const TOAST_PREF_DEFAULT = {
+      position: 'left',   // left（左侧栏旁，默认）| top-right | bottom-right | top-center
+      size: 'normal',     // small | normal | large
+      durationMs: 6000,   // 停留时长
+    }
+    let toastPref = null
+    const toastPrefListeners = new Set()
+
+    function readToastPref() {
+      if (toastPref) return toastPref
+      let v = { ...TOAST_PREF_DEFAULT }
+      try {
+        const raw = window.localStorage.getItem(TOAST_PREF_KEY)
+        if (raw) {
+          const o = JSON.parse(raw)
+          if (o && typeof o === 'object') {
+            if (typeof o.position === 'string') v.position = o.position
+            if (typeof o.size === 'string') v.size = o.size
+            if (Number(o.durationMs) > 0) v.durationMs = Number(o.durationMs)
+          }
+        }
+      } catch { /* 读不到用默认 */ }
+      toastPref = v
+      return v
+    }
+
+    function writeToastPref(patch) {
+      const next = { ...readToastPref(), ...(patch || {}) }
+      toastPref = next
+      try { window.localStorage.setItem(TOAST_PREF_KEY, JSON.stringify(next)) } catch { /* 忽略 */ }
+      toastPrefListeners.forEach((fn) => { try { fn(next) } catch { /* 忽略 */ } })
+      return next
+    }
+
+    /** 把位置/尺寸预设翻译成内联样式，避免依赖宿主主题里不存在的类 */
+    function toastStyle(pref) {
+      const p = pref.position || 'left'
+      const base = { position: 'fixed', zIndex: 14000 }
+      if (p === 'left') {
+        base.left = 'var(--dshctn-toast-left,272px)'
+        base.top = '50%'
+        base.transform = 'translateY(-50%)'
+      } else if (p === 'top-right') {
+        base.right = '20px'
+        base.top = '16px'
+      } else if (p === 'bottom-right') {
+        base.right = '20px'
+        base.bottom = '20px'
+      } else {
+        base.left = '50%'
+        base.top = '16px'
+        base.transform = 'translateX(-50%)'
+      }
+      const sizing = {
+        small: { fontSize: '11.5px', padding: '6px 10px', maxWidth: '220px' },
+        normal: { fontSize: '12.5px', padding: '8px 12px', maxWidth: '300px' },
+        large: { fontSize: '14px', padding: '12px 16px', maxWidth: '420px' },
+      }[pref.size] || { fontSize: '12.5px', padding: '8px 12px', maxWidth: '300px' }
+      return { ...base, ...sizing }
+    }
+
+    /** 设置区：气泡位置 / 尺寸 / 停留时长 */
+    function ToastPrefsCard() {
+      const [pref, setPref] = useState(() => readToastPref())
+      useEffect(() => {
+        const fn = (next) => setPref({ ...next })
+        toastPrefListeners.add(fn)
+        return () => { toastPrefListeners.delete(fn) }
+      }, [])
+
+      const chip = (label, active, onClick, key) => h('button', {
+        key,
+        type: 'button',
+        className: 'dshctp-btn' + (active ? ' primary' : ''),
+        style: { marginRight: '6px', marginBottom: '6px' },
+        onClick,
+      }, label)
+
+      const positions = [
+        ['left', '左侧栏旁'],
+        ['top-right', '右上角'],
+        ['bottom-right', '右下角'],
+        ['top-center', '顶部居中'],
+      ]
+      const sizes = [['small', '小'], ['normal', '中'], ['large', '大']]
+      const durations = [[4000, '4 秒'], [6000, '6 秒'], [10000, '10 秒'], [0, '常驻']]
+
+      return h('div', { className: 'dshctp-card' }, [
+        h('h3', { key: 'h' }, '气泡提示'),
+        h('div', { key: 'p', className: 'dshctp-hint', style: { marginBottom: '4px' } }, '显示位置'),
+        h('div', { key: 'pv' }, positions.map(([v, label]) =>
+          chip(label, pref.position === v, () => writeToastPref({ position: v }), 'pos-' + v))),
+        h('div', { key: 's', className: 'dshctp-hint', style: { margin: '4px 0' } }, '尺寸'),
+        h('div', { key: 'sv' }, sizes.map(([v, label]) =>
+          chip(label, pref.size === v, () => writeToastPref({ size: v }), 'size-' + v))),
+        h('div', { key: 'd', className: 'dshctp-hint', style: { margin: '4px 0' } }, '停留时长'),
+        h('div', { key: 'dv' }, durations.map(([v, label]) =>
+          chip(label, pref.durationMs === v, () => writeToastPref({ durationMs: v }), 'dur-' + v))),
+        h('div', { key: 'n', className: 'dshctp-hint', style: { marginTop: '6px' } },
+          '「左侧栏旁」会紧贴左侧图标栏右侧的空白处，不遮挡对话内容。'
+          + '选「常驻」后气泡不会自动消失，下一条消息到来时才替换。'),
+      ])
     }
 
     /**
