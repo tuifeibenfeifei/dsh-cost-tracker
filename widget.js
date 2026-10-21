@@ -924,8 +924,22 @@
   }
 
   function boot() {
-    start()
-    startWatchdog()
+    // 优先走 Better Sidebar 标签页（由 client.js 注册）。
+    // 若已注册（或稍后注册）则不启动浮层，避免两个入口并存。
+    if (window.__dshCostTabRegistered) return
+    var waited = 0
+    var poll = setInterval(function () {
+      waited += 300
+      if (window.__dshCostTabRegistered) {
+        clearInterval(poll)
+        return
+      }
+      if (waited >= 6000) {
+        clearInterval(poll)
+        start()           // 回退：未装 better-sidebar，启动浮层入口
+        startWatchdog()
+      }
+    }, 300)
   }
 
   if (document.body) boot()

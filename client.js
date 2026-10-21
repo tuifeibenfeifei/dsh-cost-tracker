@@ -597,6 +597,143 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /**
+     * Better Sidebar 标签页里的费用面板（React 组件）。
+     * 通过 ctx.betterSidebar.registerTab 注册，出现在 Better Sidebar 的
+     * tab 列表里（与文件 / 变更 / 任务等并列），点击后在右侧面板显示。
+     */
+    function CostTrackerPanel() {
+      const [summary, setSummary] = useState(null)
+      const [models, setModels] = useState(null)
+      const [selModel, setSelModel] = useState('')
+      const [noteText, setNoteText] = useState('')
+      const [status, setStatus] = useState('')
+      const [saving, setSaving] = useState(false)
+
+      const load = useCallback(function () {
+        fetch('/cost-tracker/summary').then(function (r) { return r.json() }).then(setSummary).catch(function (e) { setStatus('概览加载失败: ' + e.message) })
+        fetch('/cost-tracker/models').then(function (r) { return r.json() }).then(function (d) { setModels(d) }).catch(function () {})
+      }, [])
+
+      useEffect(function () { load() }, [load])
+
+      useEffect(function () {
+        if (!selModel || !models) { setNoteText(''); return }
+        const cur = (models.modelNotes && models.modelNotes[selModel]) || ''
+        setNoteText(cur)
+      }, [selModel, models])
+
+      const saveNote = useCallback(function () {
+        if (!selModel) return
+        setSaving(true)
+        fetch('/cost-tracker/model-notes', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key: selModel, value: noteText }),
+        }).then(function (r) { return r.json() }).then(function (d) {
+          setStatus(d && d.ok ? '已保存 ✓' : ('保存失败: ' + (d && d.error ? d.error : '')))
+          setSaving(false)
+          setTimeout(function () { setStatus('') }, 1600)
+        }).catch(function (e) { setStatus('保存失败: ' + e.message); setSaving(false) })
+      }, [selModel, noteText])
+
+      function fmtMoney(n) { n = Number(n) || 0; return '¥' + n.toFixed(2) }
+      function fmtTime(ts) {
+        try {
+          const d = new Date(ts)
+          const p = (x) => (x < 10 ? '0' : '') + x
+          return p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes())
+        } catch (e) { return '' }
+      }
+
+      const wrapStyle = {
+        padding: '12px 14px',
+        color: 'var(--dsw-alias-text, inherit)',
+        fontFamily: 'inherit',
+        fontSize: '13px',
+        lineHeight: '1.55',
+        height: '100%',
+        overflowY: 'auto',
+        boxSizing: 'border-box',
+      }
+      const cardStyle = {
+        background: 'var(--dsw-alias-surface-2, rgba(127,127,127,.08))',
+        border: '1px solid var(--dsw-alias-border, rgba(127,127,127,.18))',
+        borderRadius: '8px',
+        padding: '8px 10px',
+        marginBottom: '10px',
+      }
+      const labelStyle = { opacity: 0.65, fontSize: '12px' }
+      const bigStyle = { fontSize: '18px', fontWeight: 600 }
+
+      const children = []
+      children.push(h('div', { key: 'title', style: { fontWeight: 700, fontSize: '15px', marginBottom: '10px' } }, '💰 费用追踪'))
+
+      if (summary && summary.totals) {
+        const t = summary.totals
+        children.push(h('div', { key: 'tot', style: cardStyle },
+          h('div', { style: labelStyle }, '累计'),
+          h('div', { style: bigStyle }, (t.turns || 0) + ' 轮'),
+          h('div', { style: { marginTop: '4px' } },
+            'Token 费用 ' + fmtMoney(t.costTokenBased) + ' · WorkBuddy ' + (t.workbuddyCredits || 0) + ' 积分'),
+        ))
+      }
+
+      if (summary) {
+        const rows = []
+        if (summary.deepseekBalance) rows.push('DeepSeek 余额 ' + fmtMoney(summary.deepseekBalance.available))
+        if (summary.workbuddy) rows.push('WorkBuddy 积分 ' + (summary.workbuddy.credits != null ? summary.workbuddy.credits : '-'))
+        if (summary.aliyun && summary.aliyun.calibratedBalance != null) rows.push('阿里云(校准) ' + fmtMoney(summary.aliyun.calibratedBalance))
+        if (rows.length) children.push(h('div', { key: 'bal', style: cardStyle },
+          h('div', { style: { ...labelStyle, marginBottom: '4px' } }, '余额'),
+          rows.map((r, i) => h('div', { key: i }, r)),
+        ))
+      }
+
+      if (summary && summary.recentTurns && summary.recentTurns.length) {
+        const rt = summary.recentTurns.slice(0, 6).map((r, i) => {
+          const m = r.models && r.models[0]
+          const cost = r.costTokenBased ? fmtMoney(r.costTokenBased) : (r.workbuddy ? (r.workbuddy.spent + ' 积分') : '—')
+          return h('div', { key: i, style: { display: 'flex', justifyContent: 'space-between', gap: '8px', padding: '2px 0' } },
+            h('span', { style: { opacity: 0.8 } }, fmtTime(r.at) + ' · ' + (m ? m.model : '?')),
+            h('span', { style: { opacity: 0.9 } }, cost),
+          )
+        })
+        children.push(h('div', { key: 'recent', style: cardStyle },
+          h('div', { style: { ...labelStyle, marginBottom: '4px' } }, '近期轮次'),
+          h('div', null, rt),
+        ))
+      }
+
+      children.push(h('div', { key: 'model', style: cardStyle },
+        h('div', { style: { ...labelStyle, marginBottom: '6px' } }, '模型信息（官方说明 / 限时提示）'),
+        models && models.modelCatalog && models.modelCatalog.length
+          ? h('select', {
+            key: 'sel', value: selModel,
+            onChange: (e) => setSelModel(e.target.value),
+            style: { width: '100%', marginBottom: '6px', padding: '4px', background: 'var(--dsw-alias-surface, #222)', color: 'inherit', borderRadius: '6px', border: '1px solid var(--dsw-alias-border, rgba(127,127,127,.2))' },
+          }, models.modelCatalog.map((m) => h('option', { key: m.id, value: m.id }, m.name + ' (' + m.id + ')')))
+          : null,
+        h('textarea', {
+          key: 'ta', value: noteText,
+          onChange: (e) => setNoteText(e.target.value),
+          placeholder: '粘贴官方模型说明或写限时提示；保存后会在模型名下展示',
+          style: { width: '100%', minHeight: '64px', resize: 'vertical', padding: '6px', background: 'var(--dsw-alias-surface, #222)', color: 'inherit', borderRadius: '6px', border: '1px solid var(--dsw-alias-border, rgba(127,127,127,.2))', fontFamily: 'inherit', fontSize: '12px' },
+        }),
+        h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', marginTop: '6px' } },
+          h('button', {
+            key: 'save', onClick: saveNote, disabled: saving || !selModel,
+            style: { padding: '4px 12px', borderRadius: '6px', border: '1px solid var(--dsw-alias-border, rgba(127,127,127,.3))', background: 'var(--dsw-alias-accent, #4d6bfe)', color: '#fff', cursor: saving ? 'default' : 'pointer' },
+          }, saving ? '保存中…' : '保存'),
+          status ? h('span', { key: 'st', style: { fontSize: '12px', opacity: 0.8 } }, status) : null,
+        ),
+      ))
+
+      if (!summary) children.push(h('div', { key: 'loading', style: { opacity: 0.7 } }, status || '加载中…'))
+
+      return h('div', { style: wrapStyle }, children)
+    }
+
     function applyInner(ctx) {
       const namespace = 'cost-tracker'
 
@@ -626,6 +763,24 @@ window.__ModuleLoader__.load({
           }, CostTrackerModelLabel))
         return () => { try { dispose && dispose() } catch { /* 忽略 */ } }
       }, 'cost-tracker: model label')
+
+      // ---- 注册到 Better Sidebar 的标签页（与文件/任务等并列，点开右侧显示）----
+      // 用 ctx.inject 动态可选注入：未装 better-sidebar 时自动跳过，不影响模型标签功能；
+      // 装了则由 widget.js 浮层兜底的回退路径自动让位给标签页。
+      try {
+        ctx.inject(['betterSidebar'], (betterSidebar) => {
+          if (!betterSidebar || typeof betterSidebar.registerTab !== 'function') return
+          const dispose = betterSidebar.registerTab({
+            id: 'cost-tracker:panel',
+            title: '费用',
+            component: CostTrackerPanel,
+          })
+          window.__dshCostTabRegistered = true
+          return () => { try { dispose && dispose() } catch { /* 忽略 */ } }
+        })
+      } catch (e) {
+        try { console.error('[dsh-cost-tracker] betterSidebar inject failed:', e) } catch { /* 忽略 */ }
+      }
     }
 
     exports.apply = apply
