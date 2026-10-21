@@ -825,6 +825,21 @@ window.__ModuleLoader__.load({
       '  border-color:transparent;color:#fff}',
       '.dshctp-hint{font-size:11px;color:var(--dsw-alias-text-secondary,#9ca3af);line-height:1.55}',
       '.dshctp-saved{font-size:11px;color:var(--dsw-alias-state-success-primary,#22a06b)}',
+      // 自定义气泡的数值输入区
+      '.dshctp-custom{margin-top:8px;padding:10px 12px;border-radius:8px;',
+      '  background:var(--dsw-alias-bg-layer-1,rgba(127,127,127,.05));',
+      '  border:1px dashed var(--dsw-alias-border-primary,rgba(127,127,127,.3))}',
+      '.dshctp-numrow{display:flex;flex-wrap:wrap;gap:10px;margin-top:6px}',
+      '.dshctp-num{display:flex;align-items:center;gap:6px;font-size:12px;',
+      '  color:var(--dsw-alias-text-secondary,#9ca3af)}',
+      '.dshctp-num input{width:78px;box-sizing:border-box;padding:4px 6px;font-size:12px;',
+      '  border-radius:6px;font-family:inherit;',
+      '  color:var(--dsw-alias-text-primary,inherit);',
+      '  background:var(--dsw-alias-bg-base,transparent);',
+      '  border:1px solid var(--dsw-alias-border-primary,rgba(127,127,127,.25))}',
+      '.dshctp-num input:focus{outline:none;',
+      '  border-color:var(--dsw-alias-state-success-primary,#22a06b)}',
+      '.dshctp-num span.dshctp-hint{margin-left:2px}',
       // —— 主动提示（常驻条 + 帧级气泡）——
       // 常驻条位于 conversation.input.dock（输入框上方），用宿主令牌配色
       '.dshctn-dock{display:flex;flex-direction:column;gap:4px;padding:2px 0;',
@@ -1493,16 +1508,26 @@ window.__ModuleLoader__.load({
      */
     const TOAST_PREF_KEY = 'dsh-cost-tracker:toast-pref'
     const TOAST_PREF_DEFAULT = {
-      position: 'left',   // left（左侧栏旁，默认）| top-right | bottom-right | top-center
-      size: 'normal',     // small | normal | large
+      position: 'left',   // left | top-right | bottom-right | top-center | custom
+      size: 'normal',     // small | normal | large | custom
       durationMs: 6000,   // 停留时长
+      // 自定义模式：位置（px，距视口左上）与宽高（px）
+      custom: { x: 280, y: 0, width: 300, height: 0 },
+      autoFit: true,      // 字号随气泡尺寸自适应
     }
     let toastPref = null
     const toastPrefListeners = new Set()
 
+    /** 把任意值夹到 [min,max]，并保证是有限数 */
+    function clampNum(v, min, max, dflt) {
+      const n = Number(v)
+      if (!Number.isFinite(n)) return dflt
+      return Math.max(min, Math.min(max, Math.round(n)))
+    }
+
     function readToastPref() {
       if (toastPref) return toastPref
-      let v = { ...TOAST_PREF_DEFAULT }
+      let v = { ...TOAST_PREF_DEFAULT, custom: { ...TOAST_PREF_DEFAULT.custom } }
       try {
         const raw = window.localStorage.getItem(TOAST_PREF_KEY)
         if (raw) {
@@ -1510,7 +1535,18 @@ window.__ModuleLoader__.load({
           if (o && typeof o === 'object') {
             if (typeof o.position === 'string') v.position = o.position
             if (typeof o.size === 'string') v.size = o.size
-            if (Number(o.durationMs) > 0) v.durationMs = Number(o.durationMs)
+            if (Number(o.durationMs) >= 0) v.durationMs = Number(o.durationMs)
+            if (typeof o.autoFit === 'boolean') v.autoFit = o.autoFit
+            if (o.custom && typeof o.custom === 'object') {
+              // 越界值一律夹回合法区间：手改 localStorage 或旧版本数据都不能
+              // 让气泡飞到屏幕外（那样用户会以为插件坏了，却无从恢复）
+              v.custom = {
+                x: clampNum(o.custom.x, 0, 4000, TOAST_PREF_DEFAULT.custom.x),
+                y: clampNum(o.custom.y, 0, 4000, TOAST_PREF_DEFAULT.custom.y),
+                width: clampNum(o.custom.width, 120, 800, TOAST_PREF_DEFAULT.custom.width),
+                height: clampNum(o.custom.height, 0, 600, TOAST_PREF_DEFAULT.custom.height),
+              }
+            }
           }
         }
       } catch { /* 读不到用默认 */ }
@@ -1519,18 +1555,33 @@ window.__ModuleLoader__.load({
     }
 
     function writeToastPref(patch) {
-      const next = { ...readToastPref(), ...(patch || {}) }
+      const cur = readToastPref()
+      const next = { ...cur, ...(patch || {}) }
+      if (patch && patch.custom) next.custom = { ...cur.custom, ...patch.custom }
       toastPref = next
       try { window.localStorage.setItem(TOAST_PREF_KEY, JSON.stringify(next)) } catch { /* 忽略 */ }
       toastPrefListeners.forEach((fn) => { try { fn(next) } catch { /* 忽略 */ } })
       return next
     }
 
-    /** 把位置/尺寸预设翻译成内联样式，避免依赖宿主主题里不存在的类 */
+    /**
+     * 把偏好翻译成内联样式。
+     *
+     * 字号与排版的自适应规则（autoFit=true 时生效）：
+     *   气泡按「宽×高」给出一个面积，字号随宽度分档变化，
+     *   同时根据高度决定文本是单行省略还是换行铺满 —— 这样用户把气泡
+     *   拉大后字也跟着变大，而不是留一大片空白围着两行小字。
+     *   height=0 表示高度自适应（不锁死），此时按宽度定字号。
+     */
     function toastStyle(pref) {
       const p = pref.position || 'left'
       const base = { position: 'fixed', zIndex: 14000 }
-      if (p === 'left') {
+      const custom = pref.custom || TOAST_PREF_DEFAULT.custom
+
+      if (p === 'custom') {
+        base.left = custom.x + 'px'
+        base.top = custom.y + 'px'
+      } else if (p === 'left') {
         base.left = 'var(--dshctn-toast-left,272px)'
         base.top = '50%'
         base.transform = 'translateY(-50%)'
@@ -1545,19 +1596,67 @@ window.__ModuleLoader__.load({
         base.top = '16px'
         base.transform = 'translateX(-50%)'
       }
-      const sizing = {
-        small: { fontSize: '11.5px', padding: '6px 10px', maxWidth: '220px' },
-        normal: { fontSize: '12.5px', padding: '8px 12px', maxWidth: '300px' },
-        large: { fontSize: '14px', padding: '12px 16px', maxWidth: '420px' },
-      }[pref.size] || { fontSize: '12.5px', padding: '8px 12px', maxWidth: '300px' }
-      return { ...base, ...sizing }
+
+      // 预设尺寸
+      const presets = {
+        small: { fontSize: 11.5, padding: '6px 10px', maxWidth: 220 },
+        normal: { fontSize: 12.5, padding: '8px 12px', maxWidth: 300 },
+        large: { fontSize: 14, padding: '12px 16px', maxWidth: 420 },
+      }
+      let fontSize = 12.5
+      let padding = '8px 12px'
+      let width = null
+      let height = null
+
+      if (pref.size === 'custom' || p === 'custom') {
+        width = custom.width
+        height = custom.height > 0 ? custom.height : null
+        if (pref.autoFit) {
+          // 字号随宽度线性缩放，夹在 10–24px，避免过大或看不清
+          fontSize = Math.max(10, Math.min(24, Math.round(width / 24)))
+          // 内边距也按比例走，窄气泡不至于被 padding 吃光
+          const padX = Math.max(8, Math.min(24, Math.round(width / 20)))
+          const padY = Math.max(5, Math.min(18, Math.round(fontSize * 0.7)))
+          padding = padY + 'px ' + padX + 'px'
+        }
+      } else {
+        const s = presets[pref.size] || presets.normal
+        fontSize = s.fontSize
+        padding = s.padding
+        width = s.maxWidth
+      }
+
+      const out = {
+        ...base,
+        fontSize: fontSize + 'px',
+        padding,
+        maxWidth: width ? width + 'px' : undefined,
+        width: width ? width + 'px' : undefined,
+        boxSizing: 'border-box',
+      }
+      if (height) {
+        out.height = height + 'px'
+        // 高度固定时让内容纵向居中，文字多了就滚动，不会被裁得莫名
+        out.overflowY = 'auto'
+        out.alignItems = 'center'
+      }
+      // 自定义高度足够高时允许换行（否则一行省略很浪费空间）
+      if (height && height >= fontSize * 2.6) {
+        out.whiteSpace = 'normal'
+        out.textAlign = 'left'
+      } else {
+        out.whiteSpace = 'normal'
+      }
+      return out
     }
 
-    /** 设置区：气泡位置 / 尺寸 / 停留时长 */
+    /** 设置区：位置 / 尺寸 / 停留时长，含自定义坐标与宽高 */
     function ToastPrefsCard() {
       const [pref, setPref] = useState(() => readToastPref())
+      // 拖动中的临时值：松手才落盘，避免每帧写 localStorage
+      const [drag, setDrag] = useState(null)
       useEffect(() => {
-        const fn = (next) => setPref({ ...next })
+        const fn = (next) => setPref({ ...next, custom: { ...next.custom } })
         toastPrefListeners.add(fn)
         return () => { toastPrefListeners.delete(fn) }
       }, [])
@@ -1570,29 +1669,94 @@ window.__ModuleLoader__.load({
         onClick,
       }, label)
 
+      const numField = (label, value, min, max, onChange, key, hint) => h('label', {
+        key,
+        className: 'dshctp-num',
+      }, [
+        h('span', { key: 'l' }, label),
+        h('input', {
+          key: 'i',
+          type: 'number',
+          min,
+          max,
+          value,
+          onChange: (e) => onChange(clampNum(e.target.value, min, max, value)),
+        }),
+        hint ? h('span', { key: 'h', className: 'dshctp-hint' }, hint) : null,
+      ])
+
       const positions = [
         ['left', '左侧栏旁'],
         ['top-right', '右上角'],
         ['bottom-right', '右下角'],
         ['top-center', '顶部居中'],
+        ['custom', '自定义'],
       ]
-      const sizes = [['small', '小'], ['normal', '中'], ['large', '大']]
+      const sizes = [['small', '小'], ['normal', '中'], ['large', '大'], ['custom', '自定义']]
       const durations = [[4000, '4 秒'], [6000, '6 秒'], [10000, '10 秒'], [0, '常驻']]
+
+      const isCustom = pref.position === 'custom' || pref.size === 'custom'
+      const c = drag || pref.custom
 
       return h('div', { className: 'dshctp-card' }, [
         h('h3', { key: 'h' }, '气泡提示'),
+
         h('div', { key: 'p', className: 'dshctp-hint', style: { marginBottom: '4px' } }, '显示位置'),
         h('div', { key: 'pv' }, positions.map(([v, label]) =>
           chip(label, pref.position === v, () => writeToastPref({ position: v }), 'pos-' + v))),
+
         h('div', { key: 's', className: 'dshctp-hint', style: { margin: '4px 0' } }, '尺寸'),
         h('div', { key: 'sv' }, sizes.map(([v, label]) =>
           chip(label, pref.size === v, () => writeToastPref({ size: v }), 'size-' + v))),
+
+        // 自定义坐标与宽高：**始终显示**，不必先点「自定义」。
+        // 用户直接填数值就会自动切到自定义模式——要求先点一次按钮才出现
+        // 输入框，正是「没有自定义功能」的观感来源。
+        h('div', { key: 'custom', className: 'dshctp-custom' }, [
+          h('div', { key: 't', className: 'dshctp-hint' }, [
+            isCustom ? '自定义位置与大小（单位 px）' : '自定义位置与大小（填数值即启用）',
+          ]),
+          h('div', { key: 'xy', className: 'dshctp-numrow' }, [
+            numField('X 坐标', c.x, 0, 4000, (v) => setDrag({ ...c, x: v }), 'x', '距左'),
+            numField('Y 坐标', c.y, 0, 4000, (v) => setDrag({ ...c, y: v }), 'y', '距上'),
+          ]),
+          h('div', { key: 'wh', className: 'dshctp-numrow' }, [
+            numField('宽度', c.width, 120, 800, (v) => setDrag({ ...c, width: v }), 'w', '120–800'),
+            numField('高度', c.height, 0, 600, (v) => setDrag({ ...c, height: v }), 'h', '0=自适应'),
+          ]),
+          h('div', { key: 'act', className: 'dshctp-actions', style: { justifyContent: 'flex-start' } }, [
+            h('button', {
+              key: 'apply',
+              type: 'button',
+              className: 'dshctp-btn primary',
+              // 应用自定义时同时切到 custom 模式，避免「数值改了但没生效」
+              onClick: () => { writeToastPref({ custom: c, position: 'custom', size: 'custom' }); setDrag(null) },
+            }, '应用自定义'),
+            drag ? h('button', {
+              key: 'cancel',
+              type: 'button',
+              className: 'dshctp-btn',
+              onClick: () => setDrag(null),
+            }, '取消') : null,
+          ]),
+          drag ? h('div', { key: 'dirty', className: 'dshctp-hint' }, '有未应用的改动') : null,
+        ]),
+
+        // 自适应字号
+        h('div', { key: 'af', style: { marginTop: '6px' } }, [
+          chip(pref.autoFit ? '✓ 字号随尺寸自适应' : '字号随尺寸自适应',
+            pref.autoFit,
+            () => writeToastPref({ autoFit: !pref.autoFit }),
+            'autofit'),
+        ]),
+
         h('div', { key: 'd', className: 'dshctp-hint', style: { margin: '4px 0' } }, '停留时长'),
         h('div', { key: 'dv' }, durations.map(([v, label]) =>
           chip(label, pref.durationMs === v, () => writeToastPref({ durationMs: v }), 'dur-' + v))),
+
         h('div', { key: 'n', className: 'dshctp-hint', style: { marginTop: '6px' } },
-          '「左侧栏旁」会紧贴左侧图标栏右侧的空白处，不遮挡对话内容。'
-          + '选「常驻」后气泡不会自动消失，下一条消息到来时才替换。'),
+          '选「自定义」后可自由设置气泡的坐标与宽高；开启「字号自适应」时，'
+          + '字号与内边距会随宽高按比例变化。高度填 0 表示由内容决定。'),
       ])
     }
 
