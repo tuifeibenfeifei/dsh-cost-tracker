@@ -205,10 +205,11 @@
     // 拖拽手柄：右下角自由调宽
     card.appendChild(el('div', 'dshcw-resize'))
     root.appendChild(card)
-    ;(document.body || document.documentElement).appendChild(root)
+    // 挂进左侧侧栏内部（用户要求），不再用 fixed 浮层锚定账户行。
+    mountIntoSidebar()
+    // 非常驻时默认折叠（标题栏仍在侧栏里），点标题再展开
+    if (!settings.alwaysShow) root.style.display = 'none'
 
-    // 面板默认隐藏；显隐由侧栏 💰 按钮与常驻设置共同控制
-    root.style.display = 'none'
     applyCardWidth()
     enableResize()
     // 暴露面板控制 API
@@ -216,19 +217,17 @@
       toggle: function () {
         var show = root.style.display === 'none'
         root.style.display = show ? 'block' : 'none'
-        if (show) { positionPanel(); tick() }
+        if (show) { root.dataset.collapsed = '0'; tick() }
+        else root.dataset.collapsed = '1'
       },
       close: hidePanel,
+      open: function () { root.style.display = 'block'; root.dataset.collapsed = '0'; tick() },
     }
-    // 窗口变化时重新定位
-    window.addEventListener('resize', function () {
-      if (root.style.display !== 'none') positionPanel()
-    })
-    mountSidebarButton()
-    // 常驻显示：跳过首次隐藏，面板一直开着
+    mountFallbackButton()
+    // 常驻显示：面板一直开着
     if (settings.alwaysShow) {
       root.style.display = 'block'
-      positionPanel()
+      root.dataset.collapsed = '0'
       tick()
     }
     return body
@@ -265,123 +264,135 @@
   }
 
   /**
-   * 侧栏 💰 按钮：**独立浮层**，定位覆盖在账户行右端。
+   * 把面板挂进左侧侧栏容器内部（用户要求，最稳）。
    *
-   * ⚠️ 绝不能向 DSH 的 React 节点里 appendChild ——
-   * React 下次重渲染那个行时发现未知子节点会抛错，整个界面白屏
-   * （2026-10-20 实测崩溃教训）。所以这里自建 fixed 定位元素，
-   * 只跟随账户行的坐标，不碰它的 DOM 树。
+   * 做法：找到左侧栏的可滚动容器（最左边、贴边、竖向滚动列），
+   * 把面板作为该容器的**最后一个子节点** append 进去。
+   * 面板自身用 `data-dsh-cost` 标记，配合 MutationObserver 自愈：
+   * React 重渲染清掉它时，下一帧自动挂回。
+   *
+   * 不再自建 fixed 💰 浮层入口——面板直接出现在侧栏里，点标题即可折叠/展开，
+   * 彻底消除「找不到账户行就消失」的问题。
    */
-  function mountSidebarButton() {
-    // 复用：看门狗重建或 HMR 重复执行时，先摘掉旧按钮，避免堆出多个 💰
+  /**
+   * 兜底入口：只有当面板没挂进侧栏（极端情况，如侧栏结构识别失败）时，
+   * 才在左下角显示一个 fixed 💰 按钮，点它把面板挂回侧栏并展开。
+   * 正常情况下面板已经在侧栏里，这个按钮保持隐藏，绝不喧宾夺主。
+   */
+  function mountFallbackButton() {
     if (sidebarBtn && sidebarBtn.parentNode) {
       try { sidebarBtn.parentNode.removeChild(sidebarBtn) } catch (e) {}
     }
     var btn = document.createElement('button')
     sidebarBtn = btn
     btn.textContent = '💰'
-    btn.title = '费用'
-    btn.style.cssText = 'position:fixed;z-index:12005;width:26px;height:22px;' +
+    btn.title = '费用（点击在侧栏中打开面板）'
+    btn.style.cssText = 'position:fixed;z-index:12005;left:8px;bottom:8px;width:30px;height:30px;' +
       'display:none;align-items:center;justify-content:center;' +
-      'background:transparent;border:none;cursor:pointer;font-size:14px;' +
-      'line-height:22px;padding:0;border-radius:6px;opacity:.85;' +
-      'transition:background .15s'
-    btn.addEventListener('mouseenter', function () {
-      btn.style.background = 'rgba(127,127,127,.18)'
-      btn.style.opacity = '1'
-    })
-    btn.addEventListener('mouseleave', function () {
-      btn.style.background = 'transparent'
-      btn.style.opacity = '.85'
-    })
-    btn.addEventListener('click', function (e) {
-      e.stopPropagation()
-      // 常驻模式下 💰 仍可临时收起/再开（不改 alwaysShow 设置）
-      if (window.__dshCostPanel) window.__dshCostPanel.toggle()
+      'background:rgba(31,41,55,.95);border:1px solid rgba(255,255,255,.2);border-radius:8px;' +
+      'cursor:pointer;font-size:15px;color:#fff;box-shadow:0 4px 14px rgba(0,0,0,.4)'
+    btn.addEventListener('click', function () {
+      mountIntoSidebar()
+      if (window.__dshCostPanel) window.__dshCostPanel.open()
     })
     ;(document.body || document.documentElement).appendChild(btn)
-
-    function place() {
-      var acc = findAccountButton()
-      var r = acc ? acc.getBoundingClientRect() : null
-      // 入口永远可见：找不到账户行（侧栏折叠 / UI 改版 / 窗口过窄）时
-      // 退到左下角固定位，绝不 display:none——入口一没，用户就以为整个插件丢了。
-      btn.style.display = 'flex'
-      if (!r || r.width === 0 || r.height === 0) {
-        btn.style.left = '8px'
-        btn.style.top = ((window.innerHeight || 800) - 34) + 'px'
-        return
-      }
-      // 贴账户行右端内侧（与头像同一行的视觉位置），垂直居中
-      btn.style.left = Math.max(2, r.right - 30) + 'px'
-      btn.style.top = (r.top + Math.max(0, (r.height - 22) / 2)) + 'px'
-    }
-    place()
-    setInterval(place, 2000)
-    window.addEventListener('resize', place)
+    // 初始：若面板已在侧栏则隐藏按钮
+    var host = findSidebarContainer()
+    btn.style.display = (host && root && root.parentNode === host) ? 'none' : 'flex'
   }
 
-  /** 找账户按钮元素（区别于 findAccountArea 的坐标版） */
-  function findAccountButton() {
+  function findSidebarContainer() {
     try {
-      // 账户行在侧栏**最底部**：先找到侧栏容器（左侧贴边的滚动列），
-      // 再取其中位置最靠下的可见按钮。
-      var candidates = document.querySelectorAll('button')
+      var cands = document.querySelectorAll('nav, aside, [role="navigation"]')
       var best = null
-      var bestTop = -1
-      for (var i = 0; i < candidates.length; i++) {
-        var b = candidates[i]
-        var r = b.getBoundingClientRect()
+      var bestLeft = 9999
+      for (var i = 0; i < cands.length; i++) {
+        var elx = cands[i]
+        var r = elx.getBoundingClientRect()
         if (r.width === 0 || r.height === 0) continue
-        if (r.height < 20 || r.height > 120) continue
-        // 侧栏特征：左边缘贴屏幕左侧（< 60px）
-        if (r.left < 0 || r.left >= 60) continue
-        // 在侧栏下半部（避免匹配到顶部品牌/新对话按钮）
-        if (r.top < (window.innerHeight || 800) * 0.5) continue
-        // 取**最靠下**的（账户行在最左下角）——之前取了第一个匹配，误中项目行
-        if (r.top > bestTop) { bestTop = r.top; best = b }
+        if (r.left < 0 || r.left >= 80) continue         // 左侧栏：左边缘贴屏幕左边
+        if (r.width > (window.innerWidth || 1200) * 0.5) continue // 排除主区/右侧栏
+        if (r.left < bestLeft) { bestLeft = r.left; best = elx }
+      }
+      // 兜底：直接找最靠左的、能滚动的块
+      if (!best) {
+        var all = document.querySelectorAll('div')
+        for (var j = 0; j < all.length; j++) {
+          var d = all[j]
+          var rr = d.getBoundingClientRect()
+          if (rr.width === 0 || rr.height === 0) continue
+          if (rr.left < 0 || rr.left >= 80) continue
+          if (rr.width > (window.innerWidth || 1200) * 0.5) continue
+          if (d.scrollHeight > d.clientHeight + 50) {  // 有竖向滚动条的典型侧栏
+            if (rr.left < bestLeft) { bestLeft = rr.left; best = d }
+          }
+        }
       }
       return best
-    } catch (e) {}
-    return null
-  }
-
-  function hidePanel() {
-    if (root) root.style.display = 'none'
-  }
-
-  /** 找侧栏账户区（底部）的屏幕位置：返回 {left, top, width, height} 或 null */
-  function findAccountArea() {
-    try {
-      var b = findAccountButton()
-      if (!b) return null
-      var r = b.getBoundingClientRect()
-      return { left: r.left, top: r.top, width: r.width, height: r.height }
     } catch (e) { return null }
   }
 
-  /** 面板定位：锚定账户区右侧、底对齐；找不到账户区就退回左下，并钳制在视口内 */
+  var sidebarReattachObs = null
+  function mountIntoSidebar() {
+    if (!root) return
+    root.setAttribute('data-dsh-cost', '1')
+    root.style.position = 'static'   // 放进侧栏内部，不再 fixed
+    root.style.width = '100%'
+    root.style.margin = '8px 0 0'
+    root.style.display = (settings.alwaysShow || root.dataset.collapsed !== '1') ? 'block' : 'none'
+
+    var host = findSidebarContainer()
+    if (!host) {
+      // 极端兜底：挂到 body，但保持 visible，绝不消失
+      ;(document.body || document.documentElement).appendChild(root)
+      return
+    }
+    // 已经是子节点则跳过
+    if (root.parentNode === host) return
+    // 清掉容器内旧的本插件残留（避免堆叠），再挂到末尾
+    var stale = host.querySelectorAll('[data-dsh-cost]')
+    for (var i = 0; i < stale.length; i++) {
+      if (stale[i] !== root && stale[i].parentNode) {
+        try { stale[i].parentNode.removeChild(stale[i]) } catch (e) {}
+      }
+    }
+    host.appendChild(root)
+
+    // MutationObserver 自愈：React 重渲染移除了面板，下一帧挂回
+    if (sidebarReattachObs) { try { sidebarReattachObs.disconnect() } catch (e) {} }
+    sidebarReattachObs = new MutationObserver(function () {
+      try {
+        if (!root) return
+        if (!root.parentNode || root.parentNode !== host) {
+          if (findSidebarContainer() === host) host.appendChild(root)
+        }
+      } catch (e) {}
+    })
+    try { sidebarReattachObs.observe(host, { childList: true }) } catch (e) {}
+  }
+
+  function hidePanel() {
+    if (root) { root.style.display = 'none'; root.dataset.collapsed = '1' }
+  }
+
+  /** 面板定位：在侧栏模式下只是「确保挂回侧栏容器」；不再做 fixed 定位 */
   function positionPanel() {
     if (!root) return
-    var acc = findAccountArea()
-    var w = settings.cardWidth
-    var h = root.offsetHeight || 300
-    var vw = window.innerWidth || 1200
-    var vh = window.innerHeight || 800
-    var left, top
-    if (acc) {
-      left = acc.left + acc.width + 8
-      top = acc.top + acc.height - h
-    } else {
-      left = 8
-      top = vh - h - 12
+    root.style.position = 'static'
+    root.style.width = '100%'
+    var host = findSidebarContainer()
+    if (host && root.parentNode !== host) {
+      // 清掉容器内旧的本插件残留
+      var stale = host.querySelectorAll('[data-dsh-cost]')
+      for (var i = 0; i < stale.length; i++) {
+        if (stale[i] !== root && stale[i].parentNode) {
+          try { stale[i].parentNode.removeChild(stale[i]) } catch (e) {}
+        }
+      }
+      host.appendChild(root)
+    } else if (!host && root.parentNode !== (document.body || document.documentElement)) {
+      ;(document.body || document.documentElement).appendChild(root)
     }
-    // 视口钳制：任何情况下都不能把面板放到看不见的地方
-    left = Math.max(4, Math.min(left, vw - Math.min(w, vw - 8) - 4))
-    top = Math.max(4, Math.min(top, vh - Math.min(h, vh - 8) - 4))
-    root.style.left = left + 'px'
-    root.style.top = top + 'px'
-    root.style.width = Math.min(w, vw - 8) + 'px'
   }
 
   // （拖动逻辑已随悬浮模式移除）
@@ -886,15 +897,27 @@
         var host = document.body || document.documentElement
         if (!host) return
         if (!root) { start(); return }
+        // 1) 面板被移出文档（极端）-> 重建
         if (!host.contains(root)) {
           root = null
           start()
           return
         }
-        if (!sidebarBtn || !host.contains(sidebarBtn)) mountSidebarButton()
+        // 2) 面板不在侧栏内部 -> 挂回侧栏（React 重渲染把它挪走时自愈）
+        var sidebar = findSidebarContainer()
+        if (sidebar && root.parentNode !== sidebar) {
+          mountIntoSidebar()
+        } else if (!sidebar && root.parentNode !== host) {
+          ;(document.body || document.documentElement).appendChild(root)
+        }
+        // 3) 兜底按钮：仅在面板没进侧栏时显示
+        if (sidebarBtn) {
+          sidebarBtn.style.display = (sidebar && root.parentNode === sidebar) ? 'none' : 'flex'
+        }
+        // 4) 常驻模式下面板被意外收起 -> 重新显示
         if (settings.alwaysShow && root.style.display === 'none') {
           root.style.display = 'block'
-          positionPanel()
+          root.dataset.collapsed = '0'
         }
       } catch (e) {}
     }, 3000)
