@@ -1260,6 +1260,7 @@ window.__ModuleLoader__.load({
       if (diag.dock === undefined) diag.dock = 'pending'
       if (diag.overlay === undefined) diag.overlay = 'pending'
       diag.lastTurn = 0
+      diag.lastSession = ''
       diag.toast = null
       diag.adviceLevel = null
 
@@ -1271,9 +1272,16 @@ window.__ModuleLoader__.load({
             if (!alive || !j) return
             const lt = j.lastTurn
             const cur = lt && typeof lt.turn === 'number' ? lt.turn : 0
-            const prev = noticeShared ? noticeShared.lastTurn : 0
+            // ⚠️ 必须按 sessionId + turn 组合判断「新回合」。
+            // turn 是**单会话轮次号**而非全局序号：多会话并行时它会在各会话间
+            // 跳（实测 19→177→20→178→21）。只用 cur !== prev 会有两个错：
+            //   · 别的会话完成一轮 → 本界面也弹气泡（误触发）
+            //   · 同一会话连续两轮 turn 相同 → 不弹（漏触发）
+            // 所以 key 取「sessionId:turn」，只有它变了才算新回合。
+            const key = lt ? (String(lt.sessionId || '') + ':' + cur) : ''
+            const prevKey = noticeShared ? noticeShared.key : ''
             let toast = null
-            if (cur > 0 && prev > 0 && cur !== prev && lt) {
+            if (cur > 0 && prevKey !== '' && key !== prevKey && lt) {
               const wb = lt.workbuddy || {}
               let text
               let kind = 'info'
@@ -1292,9 +1300,10 @@ window.__ModuleLoader__.load({
               }
               if (text) toast = { key: 'turn-' + cur + '-' + Date.now(), text, kind }
             }
-            noticeShared = { ledger: j, lastTurn: cur, toast }
+            noticeShared = { ledger: j, lastTurn: cur, key, toast }
             // 诊断：把最近一次 poll 的结果挂上去，便于在控制台核对气泡是否触发
             diag.lastTurn = cur
+            diag.lastSession = lt ? String(lt.sessionId || '') : ''
             diag.toast = toast ? (toast.kind + ': ' + toast.text) : null
             noticeListeners.forEach((fn) => fn())
           }).catch(() => {})
