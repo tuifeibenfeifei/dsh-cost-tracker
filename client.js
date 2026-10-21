@@ -1259,6 +1259,9 @@ window.__ModuleLoader__.load({
       const diag = (window.__dshCostTrackerDiag = window.__dshCostTrackerDiag || {})
       if (diag.dock === undefined) diag.dock = 'pending'
       if (diag.overlay === undefined) diag.overlay = 'pending'
+      diag.lastTurn = 0
+      diag.toast = null
+      diag.adviceLevel = null
 
       ctx.effect(() => {
         let alive = true
@@ -1290,12 +1293,16 @@ window.__ModuleLoader__.load({
               if (text) toast = { key: 'turn-' + cur + '-' + Date.now(), text, kind }
             }
             noticeShared = { ledger: j, lastTurn: cur, toast }
+            // 诊断：把最近一次 poll 的结果挂上去，便于在控制台核对气泡是否触发
+            diag.lastTurn = cur
+            diag.toast = toast ? (toast.kind + ': ' + toast.text) : null
             noticeListeners.forEach((fn) => fn())
           }).catch(() => {})
           pFetch('/cost-tracker/recommend').then((j) => {
             if (!alive || !j || !j.advice) return
             if (!noticeShared) noticeShared = { ledger: null, lastTurn: 0, toast: null }
             noticeShared.advice = j.advice
+            diag.adviceLevel = j.advice.level
             noticeListeners.forEach((fn) => fn())
           }).catch(() => {})
         }
