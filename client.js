@@ -1833,10 +1833,9 @@ window.__ModuleLoader__.load({
         left: cur.x + 'px',
         top: cur.y + 'px',
         width: cur.width + 'px',
-        // 与真实气泡一致：高度用 min-height（内容少时保持拖出的高度，
-        // 内容多时自动增高），而不是写死 height。
-        // 高度 0 表示完全由内容决定 → 不设 minHeight，避免塌成一条线。
-        minHeight: cur.height > 0 ? cur.height + 'px' : undefined,
+        // 与真实气泡一致：默认高度完全由内容决定（不设 minHeight），
+        // 只有开启「最小高度」时才用拖出的高度作为下限。
+        minHeight: (pref.minHeightOn === true && cur.height > 0) ? cur.height + 'px' : undefined,
         boxSizing: 'border-box',
         zIndex: 13500,
         display: 'flex',
@@ -1907,7 +1906,9 @@ window.__ModuleLoader__.load({
           title: '拖动移动位置',
         }, [
           h('span', { key: 't', style: { flex: 1, minWidth: 0 } },
-            '🧾 本轮消耗 12 积分\n💡 当前 X 消耗积分，Y 现在免费，切过去更省'),
+            // 预览示例用**单行**文案：与最常见的气泡内容一致，
+            // 拖出来的高度就是一行高，不会让真实气泡留出多余空白。
+            '🧾 本轮消耗 2 积分'),
           handle('nw', 'nwse-resize', { left: '-5px', top: '-5px' }),
           handle('ne', 'nesw-resize', { right: '-5px', top: '-5px' }),
           handle('sw', 'nesw-resize', { left: '-5px', bottom: '-5px' }),
@@ -1935,6 +1936,9 @@ window.__ModuleLoader__.load({
       fontPx: 0,          // 气泡字号（px）；0 = 跟随 DSH 会话字体
       editing: false,     // 是否常驻显示可拖动预览（用户手动开关）
       dockAdvice: false,  // 是否在输入框上方常驻一条建议（默认关：建议已并入气泡）
+      // 是否启用「最小高度」：默认关 —— 高度完全由内容决定，
+      // 这样一行字的气泡就只占一行高，不会因为拖动预览的高度留下空白。
+      minHeightOn: false,
       // —— 音效 ——
       soundOn: false,     // 气泡出现时是否播放提示音（默认关，避免突然发声打扰）
       soundVol: 0.3,      // 音量 0–1
@@ -2013,6 +2017,7 @@ window.__ModuleLoader__.load({
             if (typeof o.autoFit === 'boolean') v.autoFit = o.autoFit
             if (typeof o.editing === 'boolean') v.editing = o.editing
             if (typeof o.dockAdvice === 'boolean') v.dockAdvice = o.dockAdvice
+            if (typeof o.minHeightOn === 'boolean') v.minHeightOn = o.minHeightOn
             if (typeof o.soundOn === 'boolean') v.soundOn = o.soundOn
             if (Number(o.soundVol) >= 0) v.soundVol = Math.max(0, Math.min(1, Number(o.soundVol)))
             if (typeof o.soundKind === 'string') v.soundKind = o.soundKind
@@ -2130,9 +2135,13 @@ window.__ModuleLoader__.load({
       if (pref.size === 'custom' || p === 'custom') {
         // 宽度固定（用户拖出来的横向尺寸）
         width = custom.width
-        // 高度改为「最小高度」：内容少时保持拖动的高度，
-        // 内容多时自动向下增高，不再裁掉、也不再居中。
-        minHeight = custom.height > 0 ? custom.height : null
+        // ⚠️ 高度默认**完全由内容决定**，不设 min-height。
+        // 上一版把拖动预览里拖出的高度当作 min-height，但预览的示例文案是
+        // 两行（消耗 + 建议），于是单行真实气泡也被撑成两行高——
+        // 用户反馈「气泡现在还是不止一行」就是这个原因（文案本身只有 16 字，
+        // 按宽度算明明只占一行）。
+        // 只有用户显式要求「最小高度」时才用 custom.height（见 minHeightOn）。
+        minHeight = (pref.minHeightOn === true && custom.height > 0) ? custom.height : null
         const padX = Math.max(8, Math.min(24, Math.round(width / 20)))
         const padY = Math.max(5, Math.min(18, Math.round(fontSize * 0.7)))
         padding = padY + 'px ' + padX + 'px'
@@ -2231,10 +2240,10 @@ window.__ModuleLoader__.load({
         // 拖动预览开关：预览是常驻浮层，切到对话也能看到，便于边看边调
         h('div', { key: 'drag', className: 'dshctp-custom' }, [
           h('div', { key: 't', className: 'dshctp-hint' },
-            '拖动气泡移动位置；拖左右两侧决定宽度，高度随内容自动增高'),
+            '拖动气泡移动位置；拖左右两侧决定宽度'),
           h('div', { key: 'rule', className: 'dshctp-hint', style: { marginTop: '2px', opacity: 0.8 } },
-            '宽度 = 你拖出来的固定值；高度 = 拖出来的高度作为最小值，'
-            + '文案变长时自动向下增高，不会裁掉或被压成一行空白。'),
+            '宽度 = 你拖出来的固定值；**高度默认由内容决定**——'
+            + '一行文案就只占一行高。需要固定最小高度时，打开下面的开关。'),
           h('div', { key: 'act', className: 'dshctp-actions', style: { justifyContent: 'flex-start', marginTop: '6px' } }, [
             h('button', {
               key: 'on',
@@ -2242,6 +2251,13 @@ window.__ModuleLoader__.load({
               className: 'dshctp-btn' + (pref.editing ? ' primary' : ''),
               onClick: () => writeToastPref({ editing: !pref.editing }),
             }, pref.editing ? '✓ 预览已常驻，点此关闭' : '① 开启拖动预览'),
+          ]),
+          // 最小高度开关：默认关（高度完全由内容决定）
+          h('div', { key: 'mh', style: { marginTop: '6px' } }, [
+            chip(pref.minHeightOn ? '✓ 启用最小高度' : '启用最小高度（当前：随内容自适应）',
+              pref.minHeightOn,
+              () => writeToastPref({ minHeightOn: !pref.minHeightOn }),
+              'minheight'),
           ]),
           h('div', { key: 'hint', className: 'dshctp-hint', style: { marginTop: '2px', opacity: 0.8 } },
             pref.editing
