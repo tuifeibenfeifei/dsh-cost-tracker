@@ -736,6 +736,333 @@ window.__ModuleLoader__.load({
       }, nodes)
     }
 
+    // ======================================================================
+    // 费用面板页面（sidebar.panellist 行点击后由宿主渲染进 main 区域）
+    //
+    // 这里用宿主主题令牌（--dsw-alias-*）而不是 widget.js 的硬编码深色，
+    // 因为面板是宿主页面的一部分，必须跟随明/暗主题。
+    // 数据全部来自 /cost-tracker/* 路由，与浮层同源，不会出现两份口径。
+    // ======================================================================
+
+    const PANEL_CSS = [
+      '.dshctp-root{display:flex;flex-direction:column;gap:14px;padding:18px 20px;max-width:860px;',
+      '  color:var(--dsw-alias-text-primary,inherit);font-size:13px;line-height:1.6}',
+      '.dshctp-root h2{margin:0;font-size:16px;font-weight:700}',
+      '.dshctp-root h3{margin:0 0 6px;font-size:12px;font-weight:700;letter-spacing:.04em;',
+      '  color:var(--dsw-alias-text-secondary,#9ca3af);text-transform:uppercase}',
+      '.dshctp-card{padding:14px 16px;border-radius:10px;',
+      '  background:var(--dsw-alias-bg-layer-2,rgba(127,127,127,.08));',
+      '  border:1px solid var(--dsw-alias-border-primary,rgba(127,127,127,.18))}',
+      '.dshctp-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px 18px}',
+      '.dshctp-kv{display:flex;align-items:baseline;justify-content:space-between;gap:10px}',
+      '.dshctp-kv .k{color:var(--dsw-alias-text-secondary,#9ca3af);font-size:12px}',
+      '.dshctp-kv .v{font-weight:700;font-variant-numeric:tabular-nums}',
+      '.dshctp-kv .v.free{color:var(--dsw-alias-state-success-primary,#22a06b)}',
+      '.dshctp-kv .v.warn{color:var(--dsw-alias-state-error-primary,#d92d20)}',
+      '.dshctp-sep{height:1px;background:var(--dsw-alias-border-primary,rgba(127,127,127,.18));margin:8px 0}',
+      '.dshctp-tip{padding:8px 10px;border-radius:8px;font-size:12px;line-height:1.55;',
+      '  background:var(--dsw-alias-state-warning-primary,rgba(251,191,36,.12));',
+      '  border:1px solid var(--dsw-alias-state-warning-primary,rgba(251,191,36,.35))}',
+      '.dshctp-tip.bad{background:var(--dsw-alias-state-error-primary,rgba(217,45,32,.1));',
+      '  border-color:var(--dsw-alias-state-error-primary,rgba(217,45,32,.32))}',
+      '.dshctp-tip.good{background:var(--dsw-alias-state-success-primary,rgba(34,160,107,.1));',
+      '  border-color:var(--dsw-alias-state-success-primary,rgba(34,160,107,.3))}',
+      '.dshctp-models{display:flex;flex-direction:column;gap:8px}',
+      '.dshctp-mrow{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:start;',
+      '  padding:9px 11px;border-radius:8px;',
+      '  background:var(--dsw-alias-bg-layer-1,rgba(127,127,127,.05));',
+      '  border:1px solid var(--dsw-alias-border-primary,rgba(127,127,127,.14))}',
+      '.dshctp-mname{font-weight:700;word-break:break-all}',
+      '.dshctp-mmeta{font-size:11px;color:var(--dsw-alias-text-secondary,#9ca3af);margin-top:2px}',
+      '.dshctp-mnote{font-size:11px;margin-top:5px;white-space:pre-wrap;',
+      '  color:var(--dsw-alias-text-secondary,#9ca3af)}',
+      '.dshctp-pill{display:inline-block;padding:1px 7px;border-radius:4px;font-size:10px;',
+      '  font-weight:700;letter-spacing:.06em;color:#fff;margin-right:5px}',
+      '.dshctp-form{display:flex;flex-direction:column;gap:8px}',
+      '.dshctp-form select,.dshctp-form textarea{width:100%;box-sizing:border-box;',
+      '  padding:6px 8px;font-size:12px;font-family:inherit;border-radius:6px;',
+      '  color:var(--dsw-alias-text-primary,inherit);',
+      '  background:var(--dsw-alias-bg-base,transparent);',
+      '  border:1px solid var(--dsw-alias-border-primary,rgba(127,127,127,.25))}',
+      '.dshctp-form textarea{min-height:64px;resize:vertical;line-height:1.55;white-space:pre-wrap}',
+      '.dshctp-actions{display:flex;align-items:center;gap:8px;justify-content:flex-end}',
+      '.dshctp-btn{cursor:pointer;padding:4px 12px;font-size:11px;border-radius:6px;',
+      '  border:1px solid var(--dsw-alias-border-primary,rgba(127,127,127,.3));',
+      '  background:var(--dsw-alias-bg-layer-2,rgba(127,127,127,.1));',
+      '  color:var(--dsw-alias-text-primary,inherit)}',
+      '.dshctp-btn:hover{background:var(--dsw-alias-bg-layer-3,rgba(127,127,127,.18))}',
+      '.dshctp-btn.primary{background:var(--dsw-alias-state-success-primary,#22a06b);',
+      '  border-color:transparent;color:#fff}',
+      '.dshctp-hint{font-size:11px;color:var(--dsw-alias-text-secondary,#9ca3af);line-height:1.55}',
+      '.dshctp-saved{font-size:11px;color:var(--dsw-alias-state-success-primary,#22a06b)}',
+    ].join('')
+
+    let panelCssMounted = false
+    function mountPanelCss() {
+      if (panelCssMounted) return
+      try {
+        if (typeof document === 'undefined') return
+        if (document.getElementById('dshctp-css')) { panelCssMounted = true; return }
+        const s = document.createElement('style')
+        s.id = 'dshctp-css'
+        s.textContent = PANEL_CSS
+        ;(document.head || document.documentElement).appendChild(s)
+        panelCssMounted = true
+      } catch { /* 样式失败不影响功能 */ }
+    }
+
+    /** 面板数字格式：整数不留小数点 */
+    function pNum(n) {
+      const v = Number(n)
+      if (!isFinite(v) || v <= 0) return '0'
+      return v >= 100 ? String(Math.round(v)) : (Math.round(v * 100) / 100).toString()
+    }
+
+    function pTokens(n) {
+      const v = Number(n)
+      if (!isFinite(v) || v <= 0) return '0'
+      if (v >= 1e6) return (v / 1e6).toFixed(2).replace(/\.?0+$/, '') + 'M'
+      if (v >= 1e3) return (v / 1e3).toFixed(1).replace(/\.0$/, '') + 'K'
+      return String(Math.round(v))
+    }
+
+    /** 取一次 JSON；失败返回 null，由调用方兜底 */
+    function pFetch(path) {
+      return fetch(path, { cache: 'no-store', headers: { accept: 'application/json' } })
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null)
+    }
+
+    /** 主动建议条：拉一次 /recommend，把「该换模型了」这类话讲出来 */
+    function RecoTip() {
+      const [advice, setAdvice] = useState(null)
+      useEffect(() => {
+        let alive = true
+        pFetch('/cost-tracker/recommend').then((j) => {
+          if (alive && j && j.advice) setAdvice(j.advice)
+        })
+        return () => { alive = false }
+      }, [])
+      if (!advice || !advice.message) return null
+      const cls = advice.level === 'switch' ? 'bad' : (advice.level === 'suggest' ? '' : 'good')
+      const icon = advice.level === 'switch' ? '⚠ ' : (advice.level === 'suggest' ? '💡 ' : '✓ ')
+      return h('div', { className: 'dshctp-tip ' + cls }, icon + advice.message)
+    }
+
+    function CostTrackerPanel() {
+      mountPanelCss()
+      const [summary, setSummary] = useState(null)
+      const [ledger, setLedger] = useState(null)
+      const [models, setModels] = useState(null)
+      const [limits, setLimits] = useState(null)
+      const [usage, setUsage] = useState(null)
+      // 模型信息编辑器
+      const [pick, setPick] = useState('')
+      const [text, setText] = useState('')
+      const [saved, setSaved] = useState('')
+
+      const load = useCallback(() => {
+        pFetch('/cost-tracker/summary').then(setSummary)
+        pFetch('/cost-tracker/ledger').then(setLedger)
+        pFetch('/cost-tracker/models').then(setModels)
+        pFetch('/cost-tracker/model-limits').then((j) => {
+          if (j && j.ok) {
+            const map = {}
+            for (const m of j.models || []) map[m.id] = m
+            setLimits(map)
+          }
+        })
+        pFetch('/cost-tracker/usage').then((j) => {
+          if (j && j.ok) setUsage(j.models || {})
+        })
+      }, [])
+
+      useEffect(() => {
+        load()
+        const t = setInterval(load, 60000)
+        return () => clearInterval(t)
+      }, [load])
+
+      // 选中模型变化时，把当前已保存的文案填进编辑框
+      useEffect(() => {
+        if (!pick) { setText(''); return }
+        const notes = (models && models.modelNotes) || {}
+        setText(typeof notes[pick] === 'string' ? notes[pick] : '')
+      }, [pick, models])
+
+      const save = useCallback(() => {
+        if (!pick) return
+        fetch('/cost-tracker/model-notes', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ key: pick, value: text }),
+        })
+          .then((r) => r.json())
+          .then((j) => {
+            setSaved(j && j.ok ? '已保存' : '保存失败')
+            setTimeout(() => setSaved(''), 2000)
+            load()
+          })
+          .catch(() => setSaved('保存失败'))
+      }, [pick, text, load])
+
+      const db = summary && summary.deepseekBalance
+      const al = summary && summary.aliyun
+      const wb = summary && summary.workbuddy
+      const ranked = (models && models.ranked) || []
+      const notes = (models && models.modelNotes) || {}
+      const usageMap = usage || {}
+
+      const kv = (k, v, cls) => h('div', { key: k, className: 'dshctp-kv' }, [
+        h('span', { key: 'k', className: 'k' }, k),
+        h('span', { key: 'v', className: 'v' + (cls ? ' ' + cls : '') }, v),
+      ])
+
+      return h('div', { className: 'dshctp-root' }, [
+        h('h2', { key: 't' }, '费用追踪'),
+
+        // ---- 余额 ----
+        h('div', { key: 'bal', className: 'dshctp-card' }, [
+          h('h3', { key: 'h' }, '余额'),
+          h('div', { key: 'g', className: 'dshctp-grid' }, [
+            kv('DeepSeek 官方',
+              db && db.available != null ? '¥' + pNum(db.available) : (db && db.error ? '读不到' : '—'),
+              'warn'),
+            kv('阿里云券',
+              al && al.calibratedBalance != null ? '¥' + pNum(al.calibratedBalance) : '—'),
+            kv('WorkBuddy 积分',
+              wb && wb.credits != null ? pNum(wb.credits) + ' 积分' : '—', 'free'),
+          ]),
+        ]),
+
+        // ---- 记账 ----
+        ledger && ledger.ok
+          ? h('div', { key: 'led', className: 'dshctp-card' }, [
+            h('h3', { key: 'h' }, '记账'),
+            h('div', { key: 'g', className: 'dshctp-grid' }, [
+              (() => {
+                const lt = ledger.lastTurn
+                if (!lt) return kv('本轮', '—')
+                const parts = []
+                if (Number(lt.costTokenBased) > 0) parts.push('¥' + pNum(lt.costTokenBased))
+                if (lt.workbuddy && typeof lt.workbuddy.spent === 'number' && lt.workbuddy.spent > 0) {
+                  parts.push(pNum(lt.workbuddy.spent) + ' 积分')
+                }
+                const reason = lt.workbuddy && lt.workbuddy.reason
+                const pending = reason === 'zero-pending' || reason === 'unconfirmed'
+                  || reason === 'baseline-established' || reason === 'baseline-stale'
+                let label
+                if (parts.length) label = parts.join(' / ')
+                else if (pending) label = reason === 'unconfirmed' ? '积分未入账' : '结算中…'
+                else if (lt.allFree) label = '免费'
+                else label = '—'
+                return kv('本轮', label, parts.length ? 'warn' : (label === '免费' ? 'free' : ''))
+              })(),
+              kv('今天 ' + ((ledger.day || {}).turns || 0) + ' 轮',
+                (Number((ledger.day || {}).costTokenBased) > 0 ? '¥' + pNum(ledger.day.costTokenBased) + ' / ' : '')
+                + ((ledger.day || {}).workbuddyCredits || 0) + ' 积分'),
+              kv('本月 ' + ((ledger.month || {}).turns || 0) + ' 轮',
+                (Number((ledger.month || {}).costTokenBased) > 0 ? '¥' + pNum(ledger.month.costTokenBased) + ' / ' : '')
+                + ((ledger.month || {}).workbuddyCredits || 0) + ' 积分'),
+            ]),
+            h('div', { key: 'n', className: 'dshctp-hint', style: { marginTop: '8px' } },
+              '阿里云不参与记账：token 推算偏差过大，无可信金额。'),
+          ])
+          : null,
+
+        // ---- 结算异常 ----
+        ledger && ledger.settlement && ledger.settlement.unsettled > 0
+          ? h('div', { key: 'set', className: 'dshctp-tip bad' },
+            '⚠ 最近 ' + ledger.settlement.recent + ' 轮里有 ' + ledger.settlement.unsettled
+            + ' 轮积分未结清：该轮消耗未确认，累计积分可能偏低。')
+          : null,
+
+        // ---- 主动建议 ----
+        h(RecoTip, { key: 'adv' }),
+
+        // ---- 模型清单 + 信息编辑 ----
+        h('div', { key: 'm', className: 'dshctp-card' }, [
+          h('h3', { key: 'h' }, 'WorkBuddy 模型'),
+          h('div', { key: 'list', className: 'dshctp-models' },
+            ranked.map((m) => {
+              const u = usageMap[m.id]
+              const lim = (limits || {})[m.id]
+              const exhausted = !!(lim && (lim.quotaExhaustedAt || lim.creditExhaustedAt))
+              const pills = []
+              if (m.free) pills.push({ t: '免费', c: '#15803d' })
+              if (lim && lim.rateLimited) pills.push({ t: '限流', c: '#b91c1c' })
+              if (exhausted) pills.push({ t: lim.creditExhaustedAt ? '欠费' : '额度尽', c: '#b91c1c' })
+              const rate = m.credits && String(m.credits).trim() && !/^x?0(\.0+)?$/i.test(String(m.credits).trim())
+                ? String(m.credits).trim() : ''
+              return h('div', { key: m.id, className: 'dshctp-mrow' }, [
+                h('div', { key: 'l' }, [
+                  h('div', { key: 'n', className: 'dshctp-mname' }, [
+                    ...pills.map((p, i) => h('span', {
+                      key: 'p' + i,
+                      className: 'dshctp-pill',
+                      style: { background: p.c },
+                    }, p.t)),
+                    String(m.name || m.id),
+                  ]),
+                  h('div', { key: 'meta', className: 'dshctp-mmeta' }, [
+                    m.free ? '免费' : (rate ? rate + ' 倍率' : '倍率未知'),
+                    m.contextWindow ? ' · 上下文 ' + pTokens(m.contextWindow) : '',
+                    (m.badges && m.badges.length) ? ' · ' + m.badges.join(' · ') : '',
+                    u ? ' · 你已用 ' + u.turns + ' 轮'
+                      + (u.credits > 0 ? ' · ' + pNum(u.credits) + ' 积分' : '')
+                      + (u.cost > 0 ? ' · ¥' + pNum(u.cost) : '') : '',
+                  ].join('')),
+                  notes[m.id]
+                    ? h('div', { key: 'note', className: 'dshctp-mnote' }, notes[m.id])
+                    : null,
+                ]),
+                h('button', {
+                  key: 'b',
+                  className: 'dshctp-btn',
+                  type: 'button',
+                  onClick: () => setPick(m.id),
+                }, '编辑信息'),
+              ])
+            }),
+          ),
+        ]),
+
+        // ---- 模型信息编辑器 ----
+        h('div', { key: 'e', className: 'dshctp-card' }, [
+          h('h3', { key: 'h' }, '补充模型信息'),
+          h('div', { key: 'f', className: 'dshctp-form' }, [
+            h('select', {
+              key: 's',
+              value: pick,
+              onChange: (e) => setPick(e.target.value),
+            }, [
+              h('option', { key: 'ph', value: '' }, '选择模型…'),
+              ...ranked.map((m) => h('option', { key: m.id, value: m.id }, String(m.name || m.id))),
+            ]),
+            h('textarea', {
+              key: 't',
+              value: text,
+              placeholder: '把官方公告或自己的备注粘贴到这里，例如：\n限时免费：7 月 6 日 – 10 月 31 日，每日赠送免费额度',
+              onChange: (e) => setText(e.target.value),
+            }),
+            h('div', { key: 'a', className: 'dshctp-actions' }, [
+              saved ? h('span', { key: 'sv', className: 'dshctp-saved' }, saved) : null,
+              h('button', {
+                key: 'save',
+                className: 'dshctp-btn primary',
+                type: 'button',
+                disabled: !pick,
+                onClick: save,
+              }, '保存'),
+            ]),
+            h('div', { key: 'h', className: 'dshctp-hint' },
+              '保存后，模型选择器里该模型的悬停说明会显示这段文字（覆盖内置公告）。'
+              + '清空并保存可恢复内置公告。'),
+          ]),
+        ]),
+      ])
+    }
+
     const inject = ['slots', 'locale']
 
     /**
@@ -787,21 +1114,106 @@ window.__ModuleLoader__.load({
         return () => { try { dispose && dispose() } catch { /* 忽略 */ } }
       }, 'cost-tracker: model label')
 
-      // ---- 根治「💰 入口偶尔消失」----
-      // 桌面端唯一的注入通道是启动期一次性收集的 index-inject 表；热重载 / 刷新后
-      // 这一行经常没被重新收集，于是 widget.js 没被加载、入口消失。
-      // 这里的 client 半区在**每次页面加载**都会重新 apply，所以由它亲自把
-      // widget.js 注入页面，无论怎么刷新 / 重载都能稳定出现。
-      injectWidgetScript()
+      // ---- 左侧栏入口：与「扩展管理」等原生行并列 ----
+      // 做法完全对齐官方插件市场 dshmarket 的 sidebar-entry：
+      //   sidebar.panellist 注册一个图标行 + main 注册一个 panel，
+      //   点击行由宿主 layout.selectPanel() 切换到我们的 panel。
+      // 这是宿主公开契约里唯一支持的「一键打开一个页面」路径。
+      registerSidebarEntry(ctx, namespace)
+
+      // ---- 浮层兜底：仅在侧栏行不可用时才注入 ----
+      // 桌面端的 index-inject 表是启动期一次性收集的，热重载/刷新常丢失，
+      // 所以以前靠它注入 widget.js 会「时不时消失」。现在侧栏行由本 client
+      // 半区在每次页面加载时重新注册，是稳定入口；浮层只在侧栏行没注册上
+      // （宿主太老不认 sidebar.panellist）时才兜底。
+      ctx.slots.inject('sidebar.panellist', () => {
+        try { window.__dshCostSidebarReady = true } catch { /* 忽略 */ }
+      })
+      if (!window.__dshCostSidebarReady) {
+        // 异步确认：inject 回调可能晚于本语句执行，给一帧再判一次
+        setTimeout(() => {
+          if (!window.__dshCostSidebarReady) injectWidgetScript()
+        }, 0)
+      }
+    }
+
+    /**
+     * 注册左侧栏行 + 主面板。
+     *
+     * 参考 dshmarket/client.js L15978-16012 的官方实现：
+     *   - ctx.slots.register({ name: 'main', key: PANEL_ID }, Component) 出页面
+     *   - ctx.slots.register({ name: 'sidebar.panellist', id: PANEL_ID }, Icon) 出行
+     *   - 点击行的切换由宿主自己完成（它知道 activePanelId），插件不用管
+     *
+     * 宿主太老、没有 sidebar.panellist 时 register 会抛，这里静默降级
+     * （交给人 injectWidgetScript 的浮层兜底），绝不影响模型标签功能。
+     */
+    const PANEL_ID = 'dsh-cost-tracker'
+    function registerSidebarEntry(ctx, namespace) {
+      let layoutRef = null
+      const offPanel = ctx.slots.register({
+        name: 'main',
+        key: PANEL_ID,
+        locale: namespace,
+      }, CostTrackerPanel)
+      let offRow = null
+      try {
+        offRow = ctx.slots.register({
+          name: 'sidebar.panellist',
+          id: PANEL_ID,
+          order: 90,
+          label: '费用',
+          locale: namespace,
+        }, CostTrackerNavIcon)
+      } catch (e) {
+        try { console.error('[dsh-cost-tracker] sidebar.panellist unavailable:', e) } catch { /* 忽略 */ }
+      }
+      try {
+        ctx.inject(['layout'], (scoped) => { layoutRef = scoped && scoped.layout ? scoped.layout : null })
+      } catch { /* 宿主无 layout 服务时忽略 */ }
+      return () => {
+        try {
+          if (layoutRef && layoutRef.panelInfo
+            && layoutRef.panelInfo.getSnapshot().activePanelId === PANEL_ID) {
+            layoutRef.selectPanel(null)
+          }
+        } catch { /* 忽略 */ }
+        if (typeof offRow === 'function') { try { offRow() } catch { /* 忽略 */ } }
+        if (typeof offPanel === 'function') { try { offPanel() } catch { /* 忽略 */ } }
+      }
+    }
+
+    /** 侧栏行的图标：宿主给 16px 格子，传 owner.size */
+    function CostTrackerNavIcon(owner) {
+      const size = (owner && owner.size) || 16
+      return h('svg', {
+        width: size,
+        height: size,
+        viewBox: '0 0 24 24',
+        fill: 'none',
+        stroke: 'currentColor',
+        strokeWidth: 1.8,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+        'aria-hidden': true,
+        style: { display: 'block' },
+      }, [
+        h('path', { key: 'b', d: 'M3 9h18l-1.6 10.2a2 2 0 0 1-2 1.8H6.6a2 2 0 0 1-2-1.8L3 9Z' }),
+        h('path', { key: 'h', d: 'M8.5 9V6.5a3.5 3.5 0 0 1 7 0V9' }),
+      ])
     }
 
     /**
      * 在浏览器里把费用浮层脚本注入页面（幂等：重复调用只留一个）。
      * 用原生 DOM 注入，不依赖任何 DSH 注入表，因此每次页面加载都必然生效。
+     *
+     * ⚠️ 只在侧栏行**没有**注册成功时才调用：侧栏行（sidebar.panellist +
+     * main panel）才是用户要的正式入口，浮层只是兜底，两者不该并存。
      */
     function injectWidgetScript() {
       try {
         if (typeof document === 'undefined') return
+        if (window.__dshCostSidebarReady) return
         if (window.__dshCostWidgetInjected) return
         // 避免和插件启动期的 index-inject 钩子重复加载（同源脚本浏览器会复用）
         const existing = document.querySelector('script[src="/cost-tracker/widget.js"]')
