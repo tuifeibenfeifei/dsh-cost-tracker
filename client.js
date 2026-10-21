@@ -1463,11 +1463,22 @@ window.__ModuleLoader__.load({
 
     /** 订阅共享数据的常驻条 */
     function CostDockLive(props) {
+      const [pref] = useState(() => readToastPref())
       const [, force] = useState(0)
       useEffect(() => {
         const off = props.subscribe(() => force((n) => n + 1))
-        return () => { if (typeof off === 'function') off() }
+        const onPref = () => force((n) => n + 1)
+        toastPrefListeners.add(onPref)
+        return () => {
+          if (typeof off === 'function') off()
+          toastPrefListeners.delete(onPref)
+        }
       }, [props.subscribe])
+      // ⚠️ 常驻条默认关闭。
+      // 2026-10-22 用户明确表示：建议不该显示在输入框上方（「不是气泡
+      // 该有的位置」）。建议已并入气泡显示，这里默认不渲染；
+      // 若用户确实想要输入框上方常驻，可在设置里打开。
+      if (pref.dockAdvice !== true) return null
       // 共享对象在模块级，这里直接读（subscribe 触发重渲染）
       if (!noticeShared) return null
       const advice = noticeShared.advice
@@ -1609,8 +1620,27 @@ window.__ModuleLoader__.load({
         : (shown.kind === 'free' ? 'dshctn-float free'
           : (shown.kind === 'pending' ? 'dshctn-float pending' : 'dshctn-float info'))
       const icon = shown.kind === 'spent' ? '🧾 ' : (shown.kind === 'free' ? '✓ ' : (shown.kind === 'pending' ? '⏳ ' : 'ℹ '))
-      // 位置与尺寸走内联样式，覆盖 CSS 默认的 left/top，避免两处打架
-      return h('div', { className: cls, role: 'status', style: toastStyle(pref) }, icon + shown.text)
+
+      // ⚠️ 省钱建议要**并进气泡**，而不是另开一块常驻条。
+      // 2026-10-22 用户反馈：建议（「当前 X 消耗积分，Y 现在免费，切过去更省」）
+      // 显示在输入框上方，用户认为「不是气泡该有的位置」。
+      // 两类信息都归气泡：第 1 行本轮消耗，第 2 行省钱建议（若有）。
+      const advice = pref.dockAdvice !== true && noticeShared ? noticeShared.advice : null
+      const adviceLine = advice && advice.message && advice.level !== 'ok'
+        ? (advice.level === 'switch' ? '⚠ ' : '💡 ') + advice.message
+        : null
+
+      return h('div', {
+        className: cls,
+        role: 'status',
+        style: { ...toastStyle(pref), flexDirection: 'column', alignItems: 'stretch' },
+      }, [
+        h('div', { key: 'main' }, icon + shown.text),
+        adviceLine ? h('div', {
+          key: 'adv',
+          style: { marginTop: '4px', opacity: 0.9, fontSize: '0.92em' },
+        }, adviceLine) : null,
+      ])
     }
 
     /**
@@ -1870,6 +1900,7 @@ window.__ModuleLoader__.load({
       custom: { x: 280, y: 0, width: 300, height: 0 },
       autoFit: true,      // 字号随气泡尺寸自适应
       editing: false,     // 是否常驻显示可拖动预览（用户手动开关）
+      dockAdvice: false,  // 是否在输入框上方常驻一条建议（默认关：建议已并入气泡）
     }
     let toastPref = null
     const toastPrefListeners = new Set()
@@ -1894,6 +1925,7 @@ window.__ModuleLoader__.load({
             if (Number(o.durationMs) >= 0) v.durationMs = Number(o.durationMs)
             if (typeof o.autoFit === 'boolean') v.autoFit = o.autoFit
             if (typeof o.editing === 'boolean') v.editing = o.editing
+            if (typeof o.dockAdvice === 'boolean') v.dockAdvice = o.dockAdvice
             if (o.custom && typeof o.custom === 'object') {
               // 越界值一律夹回合法区间：手改 localStorage 或旧版本数据都不能
               // 让气泡飞到屏幕外（那样用户会以为插件坏了，却无从恢复）
@@ -2078,6 +2110,23 @@ window.__ModuleLoader__.load({
             () => writeToastPref({ autoFit: !pref.autoFit }),
             'autofit'),
         ]),
+
+        // 建议的显示位置：默认并进气泡（不在输入框上方另开一条）
+        h('div', { key: 'dk', className: 'dshctp-hint', style: { margin: '6px 0 2px' } }, '省钱建议'),
+        h('div', { key: 'dkv' }, [
+          chip(pref.dockAdvice ? '显示在输入框上方' : '✓ 显示在气泡里（推荐）',
+            !pref.dockAdvice,
+            () => writeToastPref({ dockAdvice: false }),
+            'dock-off'),
+          chip(pref.dockAdvice ? '✓ 显示在输入框上方' : '显示在输入框上方',
+            pref.dockAdvice,
+            () => writeToastPref({ dockAdvice: true }),
+            'dock-on'),
+        ]),
+        h('div', { key: 'dkh', className: 'dshctp-hint', style: { marginTop: '2px', opacity: 0.8 } },
+          pref.dockAdvice
+            ? '建议会在输入框上方常驻一条，同时气泡里也会带一行。'
+            : '建议直接并进气泡显示（第 2 行），输入框上方不再另占位置。'),
 
         h('div', { key: 'd', className: 'dshctp-hint', style: { margin: '4px 0' } }, '停留时长'),
         h('div', { key: 'dv' }, durations.map(([v, label]) =>
