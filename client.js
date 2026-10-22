@@ -1648,10 +1648,22 @@ window.__ModuleLoader__.load({
       ])
     }
 
+    /** 气泡种类 → 图标 */
+    function iconOf(kind) {
+      return kind === 'spent' ? '🧾 ' : (kind === 'free' ? '✓ '
+        : (kind === 'pending' ? '⏳ ' : 'ℹ '))
+    }
+
     /** 订阅共享数据的帧级气泡：按设置的位置/尺寸显示，按时长自动消失（0=常驻） */
     function CostToastLive(props) {
       const [shown, setShown] = useState(null)
       const [off, setOff] = useState(false)
+      // 独立「省钱建议」气泡：常驻、带关闭按钮，必须用户手动关掉。
+      // 2026-10-22 用户明确要求：「这种重要的提示应该用气泡提示，然后常驻
+      // 不会消失需要玩家点击确认才能关闭」。建议与「本轮消耗」解耦——
+      // 消耗气泡按时长消失，建议气泡一直挂着直到用户确认。
+      const [advShown, setAdvShown] = useState(null)
+      const [advOff, setAdvOff] = useState(false)
       // 订阅设置变化：用户在面板里改完，下一个气泡立刻按新样式出现
       const [pref, setPref] = useState(() => readToastPref())
       useEffect(() => {
@@ -1661,13 +1673,22 @@ window.__ModuleLoader__.load({
       }, [])
       useEffect(() => {
         const unsub = props.subscribe(() => {
+          // 消耗气泡
           if (noticeShared && noticeShared.toast && (!shown || noticeShared.toast.key !== shown.key)) {
             setShown(noticeShared.toast)
             setOff(false)
           }
+          // 省钱建议：level 变了或文案变了才重新弹出（同一条不重复弹）
+          const adv = noticeShared ? noticeShared.advice : null
+          const key = adv && adv.level !== 'ok' ? (adv.level + '|' + adv.currentId + '|' + adv.message) : ''
+          const prevKey = advShown ? (advShown.level + '|' + advShown.currentId + '|' + advShown.message) : ''
+          if (key && key !== prevKey) {
+            setAdvShown(adv)
+            setAdvOff(false)
+          }
         })
         return () => { if (typeof unsub === 'function') unsub() }
-      }, [shown])
+      }, [shown, advShown])
       useEffect(() => {
         if (!shown) return
         // durationMs === 0 → 常驻，不自动消失（下一条消息到来时才替换）
@@ -1675,31 +1696,70 @@ window.__ModuleLoader__.load({
         const t = setTimeout(() => setOff(true), Number(pref.durationMs))
         return () => clearTimeout(t)
       }, [shown, pref.durationMs])
-      if (!shown || off) return null
-      const cls = shown.kind === 'spent' ? 'dshctn-float spend'
-        : (shown.kind === 'free' ? 'dshctn-float free'
-          : (shown.kind === 'pending' ? 'dshctn-float pending' : 'dshctn-float info'))
-      const icon = shown.kind === 'spent' ? '🧾 ' : (shown.kind === 'free' ? '✓ ' : (shown.kind === 'pending' ? '⏳ ' : 'ℹ '))
-
-      // ⚠️ 省钱建议要**并进气泡**，而不是另开一块常驻条。
-      // 2026-10-22 用户反馈：建议（「当前 X 消耗积分，Y 现在免费，切过去更省」）
-      // 显示在输入框上方，用户认为「不是气泡该有的位置」。
-      // 两类信息都归气泡：第 1 行本轮消耗，第 2 行省钱建议（若有）。
-      const advice = pref.dockAdvice !== true && noticeShared ? noticeShared.advice : null
-      const adviceLine = advice && advice.message && advice.level !== 'ok'
-        ? (advice.level === 'switch' ? '⚠ ' : '💡 ') + advice.message
-        : null
+      if (!shown || off) { /* 消耗气泡关了不影响建议气泡 */ }
+      const advice = noticeShared ? noticeShared.advice : null
+      const adviceLive = advShown && !advOff && advice
+        && advice.level === advShown.level && advice.message === advShown.message
+      const adviceCls = advice && advice.level === 'switch' ? 'dshctn-float spend' : 'dshctn-float info'
 
       return h('div', {
-        className: cls,
-        role: 'status',
-        style: { ...toastStyle(pref), flexDirection: 'column', alignItems: 'stretch' },
+        className: 'dshctn-stack',
+        style: {
+          position: 'fixed', zIndex: 99999,
+          ...(pref.position === 'top-right' ? { top: '12px', right: '12px' }
+            : (pref.position === 'bottom-right' ? { bottom: '12px', right: '12px' }
+              : (pref.position === 'top-center' ? { top: '12px', left: '50%', transform: 'translateX(-50%)' }
+                : (pref.position === 'custom'
+                  ? { top: ((pref.custom || {}).y || 0) + 'px', left: ((pref.custom || {}).x || 0) + 'px' }
+                  : { left: 'var(--dshctn-toast-left,272px)', top: '50%', transform: 'translateY(-50%)' })))),
+          display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'stretch',
+          pointerEvents: 'none',
+        },
       }, [
-        h('div', { key: 'main' }, icon + shown.text),
-        adviceLine ? h('div', {
-          key: 'adv',
-          style: { marginTop: '4px', opacity: 0.9, fontSize: '0.92em' },
-        }, adviceLine) : null,
+        // ① 本轮消耗气泡（按时长消失）
+        shown && !off
+          ? h('div', {
+              key: 'toast',
+              className: shown.kind === 'spent' ? 'dshctn-float spend'
+                : (shown.kind === 'free' ? 'dshctn-float free'
+                  : (shown.kind === 'pending' ? 'dshctn-float pending' : 'dshctn-float info')),
+              role: 'status',
+              style: { ...toastStyle(pref), flexDirection: 'column', alignItems: 'stretch', pointerEvents: 'auto' },
+            }, [
+              h('div', { key: 'main' }, iconOf(shown.kind) + shown.text),
+            ])
+          : null,
+        // ② 省钱建议气泡：常驻 + 手动关闭
+        adviceLive
+          ? h('div', {
+              key: 'adv',
+              className: adviceCls,
+              role: 'alert',
+              style: {
+                ...toastStyle(pref), flexDirection: 'column', alignItems: 'stretch',
+                pointerEvents: 'auto',
+                borderWidth: '2px', borderStyle: 'solid',
+              },
+            }, [
+              h('div', { key: 'row', style: { display: 'flex', alignItems: 'flex-start', gap: '6px' } }, [
+                h('div', { key: 'txt', style: { flex: 1, fontWeight: 600 } },
+                  (advice.level === 'switch' ? '⚠ ' : '💡 ') + advice.message),
+                h('button', {
+                  key: 'close',
+                  type: 'button',
+                  title: '知道了，关闭提示',
+                  'aria-label': '关闭提示',
+                  onClick: (e) => { e.stopPropagation(); setAdvOff(true) },
+                  style: {
+                    flex: '0 0 auto', border: 'none', background: 'rgba(255,255,255,0.18)',
+                    color: 'inherit', cursor: 'pointer', borderRadius: '4px',
+                    width: '22px', height: '22px', lineHeight: '20px', fontSize: '14px',
+                    padding: '0', textAlign: 'center',
+                  },
+                }, '×'),
+              ]),
+            ])
+          : null,
       ])
     }
 
