@@ -334,7 +334,8 @@ curl -X POST http://127.0.0.1:<port>/cost-tracker/model-state \
 | `/cost-tracker/session` | GET | 本次会话花费（按 session 聚合） |
 | `/cost-tracker/turn` | GET | 最近一轮 |
 | `/cost-tracker/turns` | GET | 每轮消耗明细（`?limit=50&platform=workbuddy`） |
-| `/cost-tracker/health` | GET | WorkBuddy 账号健康（顺带采样） |
+| `/cost-tracker/health` | GET | WorkBuddy 账号健康（顺带采样）+ 前置插件状态 |
+| `/cost-tracker/dependency` | GET | 前置插件（WorkBuddy 连接插件）探测状态；`?force=1` 跳过 60 秒缓存 |
 | `/cost-tracker/aliyun` | GET | 阿里云抵用券余额视图 |
 | `/cost-tracker/aliyun/calibrate` | POST | 用官方 CSV 校准抵用券余额 |
 | `/cost-tracker/deepseek-balance` | GET | 官方余额；`?force=1` 跳过 60 秒缓存 |
@@ -368,6 +369,23 @@ curl -X POST http://127.0.0.1:<port>/cost-tracker/model-state \
 （DSH 侧不会自动切换，客户端才有这个行为）。
 
 ## 安装
+
+### 前置依赖（必装）
+
+本插件的 **WorkBuddy 相关功能依赖 WorkBuddy 连接插件**，必须二选一先装好：
+
+| 插件 | 说明 |
+|---|---|
+| `dsh-connect-workbuddy` | **推荐**。新版，5.x 系列 |
+| `dsh-workbuddy-connect` | 旧版，0.7.x 系列 |
+
+缺少它时：WorkBuddy 积分、模型清单、倍率、省钱推荐全部不可用（面板顶部会显示安装指引）。
+阿里云 / DeepSeek 官方的轮次与 token 统计不受影响。
+
+> DSH 没有声明式插件间依赖机制，所以本插件在**运行时探测**该前置插件
+> （`GET /cost-tracker/dependency`），并在缺失时给出明确提示。
+
+### 安装本插件
 
 ```bash
 dsh plugin --profile desktop add link:<本插件目录的绝对路径>
@@ -423,7 +441,12 @@ dsh-cost-tracker/
 
 ## 版本
 
-- **0.4.0** — 费用挂件（自动注入）；分时段省钱推荐（实时排除不可用模型）；
+- **0.5.1** — 新增前置插件探测与安装指引（缺 WorkBuddy 连接插件时明确提示）；
+  记账三组分开展示；阿里云不再显示折算金额（只统计轮次）；
+  省钱建议改为常驻气泡 + 手动关闭；修复全局报错误标单模型限流
+- **0.5.0** — 适配 `dsh-connect-workbuddy` 5.x 的新 `/usage` 接口结构；
+  额度用尽改按次日 00:00 重置；限流优先级最高
+- 0.4.0 — 费用挂件（自动注入）；分时段省钱推荐（实时排除不可用模型）；
   记账双档（单轮/当天/当月）；限流标签与悬停恢复倒计时；限额状态持久化
 - 0.3.0 — 模型内联标签 + 悬停说明；修复 DeepSeek 余额读取
 - 0.2.1 — 移除阿里云 token 计价；新增 `/turns` 明细路由

@@ -981,11 +981,14 @@ window.__ModuleLoader__.load({
       // 手动结算状态
       const [reconciling, setReconciling] = useState(false)
       const [recoMsg, setRecoMsg] = useState('')
+      // 前置插件（WorkBuddy 连接插件）状态：缺插件时面板顶部给出安装指引
+      const [dep, setDep] = useState(null)
 
       const load = useCallback(() => {
         pFetch('/cost-tracker/summary').then(setSummary)
         pFetch('/cost-tracker/ledger').then(setLedger)
         pFetch('/cost-tracker/models').then(setModels)
+        pFetch('/cost-tracker/dependency').then((j) => { if (j && j.ok) setDep(j.dependency) })
         pFetch('/cost-tracker/model-limits').then((j) => {
           if (j && j.ok) {
             const map = {}
@@ -1066,6 +1069,33 @@ window.__ModuleLoader__.load({
       return h('div', { className: 'dshctp-root' }, [
         h('div', { key: 'inner', className: 'dshctp-inner' }, [
         h('h2', { key: 't' }, '费用追踪'),
+
+        // ---- 前置插件缺失提示 ----
+        // DSH 没有声明式插件依赖，只装本插件而不装 WorkBuddy 连接插件时，
+        // 积分/模型/推荐全是空——以前只显示「—」，用户完全看不出原因。
+        // 这里给出明确的安装指引 + 一键重新检测（装完插件点一下即可）。
+        dep && dep.available === false
+          ? h('div', { key: 'dep', className: 'dshctp-tip bad' }, [
+              h('div', { key: 'txt', style: { fontWeight: 700 } },
+                '⚠ 缺少前置插件：WorkBuddy 连接插件未安装'),
+              h('div', { key: 'why', style: { marginTop: '4px', fontSize: '0.92em' } },
+                '本插件的 WorkBuddy 积分、模型清单、倍率与省钱推荐，全部依赖 '
+                + 'WorkBuddy 连接插件提供数据。未安装时这些功能不可用（不影响阿里云 / DeepSeek 官方的轮次统计）。'),
+              h('div', { key: 'how', style: { marginTop: '4px', fontSize: '0.92em' } },
+                '安装方式：在 DSH 插件市场搜索并安装「DSH Connect WorkBuddy」'
+                + '（包名 dsh-connect-workbuddy，或旧版 dsh-workbuddy-connect），'
+                + '装完重启 DSH。'),
+              h('div', { key: 'act', className: 'dshctp-actions', style: { marginTop: '8px', justifyContent: 'flex-start' } }, [
+                h('button', {
+                  key: 're',
+                  className: 'dshctp-btn',
+                  type: 'button',
+                  onClick: () => pFetch('/cost-tracker/dependency?force=1')
+                    .then((j) => { if (j && j.ok) setDep(j.dependency) }),
+                }, '装好了，重新检测'),
+              ]),
+            ])
+          : null,
 
         // ---- 余额 ----
         h('div', { key: 'bal', className: 'dshctp-card' }, [
