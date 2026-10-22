@@ -1082,15 +1082,17 @@ window.__ModuleLoader__.load({
         ]),
 
         // ---- 记账 ----
+        // 三组（本轮/今天/本月）分行展示，组间留空隙——之前全挤在一个 grid
+        // 里，视觉上糅成一片，用户分不清哪行属于哪一组。
+        // 阿里云**不显示人民币估算**：token×倍率的折算与真实账单偏差极大
+        // （用户明确反馈估算值误导），只报轮次，金额一律不列。
         ledger && ledger.ok
           ? h('div', { key: 'led', className: 'dshctp-card' }, [
             h('h3', { key: 'h' }, '记账'),
-            h('div', { key: 'g', className: 'dshctp-grid' }, [
+            h('div', { key: 'g', className: 'dshctp-grid', style: { rowGap: '12px' } }, [
               (() => {
                 const lt = ledger.lastTurn
                 if (!lt) return kv('本轮', '—')
-                // 本轮也要分平台：aliyun 走人民币、workbuddy 走积分，
-                // 拼成一行会让人以为 WorkBuddy 在扣钱。
                 const plat = ((lt.models || [])[0] || {}).platform || ''
                 const reason = lt.workbuddy && lt.workbuddy.reason
                 const pending = reason === 'zero-pending' || reason === 'unconfirmed'
@@ -1098,7 +1100,6 @@ window.__ModuleLoader__.load({
                 if (plat === 'workbuddy' || (lt.workbuddy && typeof lt.workbuddy.spent === 'number')) {
                   const spent = Number(lt.workbuddy && lt.workbuddy.spent)
                   let label
-                  // 与气泡同理：allFree 优先，免费轮不该说成「结算中/未入账」
                   if (lt.allFree) label = '免费'
                   else if (Number.isFinite(spent) && spent > 0) label = pNum(spent) + ' 积分'
                   else if (pending) label = reason === 'unconfirmed' ? '积分未入账' : '结算中…'
@@ -1106,30 +1107,28 @@ window.__ModuleLoader__.load({
                   return kv('本轮 · WorkBuddy', label,
                     spent > 0 && !lt.allFree ? 'warn' : (label === '免费' ? 'free' : ''))
                 }
-                if (Number(lt.costTokenBased) > 0) {
-                  return kv('本轮 · 阿里云', '¥' + pNum(lt.costTokenBased), 'warn')
-                }
-                return kv('本轮', '—')
+                // 本轮阿里云：不给金额（无法准确计费），只确认轮次
+                return kv('本轮 · 阿里云', ((lt.models || [])[0] || {}).model || '1 轮')
               })(),
-              // ⚠️ 两个平台的账必须分列，不能合成一行。
-              // 2026-10-22 用户质疑「WorkBuddy 不是看积分吗，怎么会有人民币计费」——
-              // 实测那 ¥4.70 全部来自 aliyun（阿里云 deepseek-v4.1-flash，11 轮），
-              // WorkBuddy 的 5 个模型 cost 全是 0。口径本身没错，错在面板把
-              // 「今天的 ¥X / Y 积分」写在一起，看起来就像 WorkBuddy 也在扣钱。
-              kv('今天 ' + ((ledger.day || {}).turns || 0) + ' 轮 · 阿里云',
-                '¥' + pNum((ledger.day || {}).costTokenBased),
-                Number((ledger.day || {}).costTokenBased) > 0 ? 'warn' : ''),
-              kv('今天 WorkBuddy',
-                String((ledger.day || {}).workbuddyCredits || 0) + ' 积分',
+              // ---- 今天 ----
+              h('div', { key: 'dayhd', className: 'dshctp-hint', style: {
+                gridColumn: '1 / -1', marginTop: '4px', fontWeight: 700,
+                borderTop: '1px solid var(--dsw-alias-border-secondary, #333)', paddingTop: '8px',
+              } }, '今天'),
+              kv('阿里云', ((ledger.day || {}).turns || 0) + ' 轮（费用无法准确折算）'),
+              kv('WorkBuddy', String((ledger.day || {}).workbuddyCredits || 0) + ' 积分',
                 Number((ledger.day || {}).workbuddyCredits) > 0 ? 'warn' : ''),
-              kv('本月 ' + ((ledger.month || {}).turns || 0) + ' 轮 · 阿里云',
-                '¥' + pNum((ledger.month || {}).costTokenBased)),
-              kv('本月 WorkBuddy',
-                String((ledger.month || {}).workbuddyCredits || 0) + ' 积分'),
+              // ---- 本月 ----
+              h('div', { key: 'monhd', className: 'dshctp-hint', style: {
+                gridColumn: '1 / -1', marginTop: '4px', fontWeight: 700,
+                borderTop: '1px solid var(--dsw-alias-border-secondary, #333)', paddingTop: '8px',
+              } }, '本月'),
+              kv('阿里云', ((ledger.month || {}).turns || 0) + ' 轮（费用无法准确折算）'),
+              kv('WorkBuddy', String((ledger.month || {}).workbuddyCredits || 0) + ' 积分'),
             ]),
             h('div', { key: 'n', className: 'dshctp-hint', style: { marginTop: '8px' } },
-              'WorkBuddy 只扣积分，不产生人民币费用（上表已分平台列出）。'
-              + '阿里云的 ¥ 是 token 按倍率折算的估算值，非账单。'),
+              'WorkBuddy 按积分余额差结算，准确。阿里云的 token 计费与本插件折算方式不一致，'
+              + '插件无法给出准确金额，故只统计轮次；准确费用以阿里云控制台账单为准。'),
           ])
           : null,
 
