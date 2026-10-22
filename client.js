@@ -75,18 +75,13 @@ window.__ModuleLoader__.load({
     let HEAVY_MODELS = ['space-bunny', 'glm-5.3', 'glm-5.3-flash']
 
     /**
-     * 轻量/日常向模型：便宜甚至免费，适合高频轻任务。
-     *
-     * ⚠️ 2026-10-22 用户明确要求：「标签不用写效果不行，也不要说什么模型
-     * 复杂任务不能完成，要说 XX 模型适用于什么」。所以这里用**正面描述**
-     * 适用场景，不写负面评价；hy3 系列仍因免费排在推荐前列。
-     */
-    let WEAK_MODELS = ['hy3', 'hy3-x']
-
-    /**
-     * 模型适用场景（正面描述）。内容来自公开评测与社区反馈（2026-10 检索）。
+     * 模型适用场景（正面描述「适合干什么」）。
+     * 内容来自公开评测与社区反馈（2026-10 检索）。
      * 与 recommend.js 的 SUITABILITY 保持一致——两处必须同步，
      * 否则推荐理由和悬停说明会说不同的话。
+     *
+     * ⚠️ 只在悬停说明里展示，**不做成标签**：用户 2026-10-22 明确要求
+     * 「标签不要太多」，档位（免费/主力/常用/重型）+ 上游 badge 已经够多了。
      */
     const SUITABILITY = {
       'step-5-preview': '长程 Agent、复杂软件工程、金融分析、深度研究',
@@ -120,7 +115,6 @@ window.__ModuleLoader__.load({
       if (Array.isArray(c.quotaModels) && c.quotaModels.length) QUOTA_MODEL = c.quotaModels.map(String)
       if (Array.isArray(c.peakModels) && c.peakModels.length) NIGHT_DISCOUNT = c.peakModels.map(String)
       if (Array.isArray(c.heavyModels)) HEAVY_MODELS = c.heavyModels.map(String)
-      if (Array.isArray(c.weakModels)) WEAK_MODELS = c.weakModels.map(String)
       // 促销说明：可选配置（promoDesc: { 模型id: 文案 }）；不配则悬停显示 badge 原文
       if (c.promoDesc && typeof c.promoDesc === 'object') {
         PROMO_DESC = {}
@@ -330,16 +324,6 @@ window.__ModuleLoader__.load({
           : text.indexOf('折扣') !== -1 ? '#7c3aed'
           : '#6d28d9'
         tags.push({ text, bg, title: text })
-      }
-
-      // 轻量/日常向：正面描述适用场景（用户 2026-10-22 要求不写负面评价）。
-      // 用绿色而非警示色——这是「适合什么」的说明，不是「有问题」的警告。
-      if (WEAK_MODELS.indexOf(modelId) !== -1) {
-        tags.push({
-          text: '适合日常',
-          bg: '#15803d',
-          title: '适合：' + (SUITABILITY[modelId] || '日常办公、高频问答'),
-        })
       }
 
       // 峰谷折扣：按官方峰谷规则推算（模型清单可配置）。
