@@ -378,14 +378,20 @@ window.__ModuleLoader__.load({
       } else if (NIGHT_DISCOUNT.indexOf(modelId) !== -1) {
         lines.push('周一至周五 09:00–12:00、14:00–18:00 属高峰原价；中午、晚间与周末节假日为谷时 5 折')
       } else if (meta.badges && meta.badges.length) {
-        // badge 是上游实时状态（夜间免费/限时免费/独家限免…）。
-        // 本地不编造时间窗——那些日期会过期且与上游不同步；
-        // 只标注「限时」性质，并提示以官方公告为准。
-        const badges = meta.badges.map(String)
-        lines.push(badges.join(' · '))
-        const limited = badges.some((b) => /限|免费|折扣/.test(b))
-        if (limited) {
-          lines.push('⚠ 限时活动：有期限限制，结束后恢复原价/按倍率计费，以官方公告为准')
+        // badge 是上游实时状态（夜间免费/限时折扣/订阅优先/独家限免…）。
+        // 本地不编造时间窗——那些日期会过期且与上游不同步。
+        // ⚠️ 已被第 3 段覆盖的徽标（夜间免费 / 每日赠额型）不再重复：
+        // 否则 hy4-preview 的「夜间免费」会先在「免费时段…」讲一遍，
+        // 这里又原样讲一遍、还追加「⚠ 限时活动」，同一信息出现三次。
+        // 只展示未被第 3 段覆盖的促销（限时折扣/订阅优先/独家限免等）。
+        const extra = meta.badges
+          .map(String)
+          .filter((b) => !(isNightFree && b.indexOf('夜间免费') !== -1))
+        if (extra.length) {
+          lines.push(extra.join(' · '))
+          if (extra.some((b) => /限|免费|折扣/.test(b))) {
+            lines.push('⚠ 限时活动：有期限限制，结束后恢复原价/按倍率计费，以官方公告为准')
+          }
         }
       }
 
