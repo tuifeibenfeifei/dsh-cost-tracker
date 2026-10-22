@@ -75,14 +75,33 @@ window.__ModuleLoader__.load({
     let HEAVY_MODELS = ['space-bunny', 'glm-5.3', 'glm-5.3-flash']
 
     /**
-     * 效果差的模型：便宜甚至免费，但复杂/深奥问题处理不好。
+     * 轻量/日常向模型：便宜甚至免费，适合高频轻任务。
      *
-     * ⚠️ 与 HEAVY_MODELS 不同：**不改变排序位置**。
-     * 2026-10-22 用户反馈 hy3 系列效果不行，但同时要求「因为免费，
-     * 所以还是要放在前面，但是要在模型信息提示深奥问题效果不太行」。
-     * 所以这里只加「效果有限」徽章，不动 tier 排序。
+     * ⚠️ 2026-10-22 用户明确要求：「标签不用写效果不行，也不要说什么模型
+     * 复杂任务不能完成，要说 XX 模型适用于什么」。所以这里用**正面描述**
+     * 适用场景，不写负面评价；hy3 系列仍因免费排在推荐前列。
      */
     let WEAK_MODELS = ['hy3', 'hy3-x']
+
+    /**
+     * 模型适用场景（正面描述）。内容来自公开评测与社区反馈（2026-10 检索）。
+     * 与 recommend.js 的 SUITABILITY 保持一致——两处必须同步，
+     * 否则推荐理由和悬停说明会说不同的话。
+     */
+    const SUITABILITY = {
+      'step-5-preview': '长程 Agent、复杂软件工程、金融分析、深度研究',
+      'hy4-preview': '长文档、大代码库、跨文件分析、带排版的 PPT/表格',
+      'hy3': '日常办公、高频问答、简单内容处理',
+      'hy3-x': '日常办公、高频问答（Hy3 额度用尽后的付费延续）',
+      'glm-5.3-flash': '文档/PDF 推理、多模态读图、高吞吐后台批处理',
+      'glm-5.3': '编码/终端 Agent、凭记忆的事实问答、正式交付物',
+      'deepseek-v4.1-flash': '编码、Agent 工作流、长上下文检索、成本敏感的重复调用',
+      'space-bunny': '跨 SaaS 业务流自动化、软件工程、电脑操作、安全审计',
+      'minimax-m3.1-flash': '跨 SaaS 业务流自动化、软件工程、电脑操作、安全审计',
+      'minimax-m3': '跨 SaaS 业务流自动化、软件工程、电脑操作',
+      'wb-lite': '极简问答、格式转换',
+      'hy-image3.5-preview': '图片生成',
+    }
 
     /** 峰谷规则模型（上游不给 badge，按官方峰谷本地推算；可被配置覆盖） */
     let NIGHT_DISCOUNT = ['deepseek-v4.1-flash', 'deepseek-v4-pro']
@@ -313,14 +332,13 @@ window.__ModuleLoader__.load({
         tags.push({ text, bg, title: text })
       }
 
-      // 效果有限：便宜/免费但复杂问题处理不好。
-      // 与「重型」（贵）分开——这个是能力边界提示，用琥珀色而非红色，
-      // 且**不影响排序**（hy3 系列仍因免费排在前面）。
+      // 轻量/日常向：正面描述适用场景（用户 2026-10-22 要求不写负面评价）。
+      // 用绿色而非警示色——这是「适合什么」的说明，不是「有问题」的警告。
       if (WEAK_MODELS.indexOf(modelId) !== -1) {
         tags.push({
-          text: '效果有限',
-          bg: '#b45309',
-          title: '简单任务可用；深奥/复杂问题效果不太行，建议换主力模型',
+          text: '适合日常',
+          bg: '#15803d',
+          title: '适合：' + (SUITABILITY[modelId] || '日常办公、高频问答'),
         })
       }
 
@@ -390,7 +408,6 @@ window.__ModuleLoader__.load({
       const lines = []
       const isNightFree = (meta.badges || []).some((b) => String(b).indexOf('夜间免费') !== -1)
       const isHeavy = HEAVY_MODELS.indexOf(modelId) !== -1
-      const isWeak = WEAK_MODELS.indexOf(modelId) !== -1
 
       // ---- 1) 计费方式 ----
       // 重型模型要把「倍率低但实际贵」讲清楚：用户看到 x0.08 会疑惑它为什么
@@ -405,17 +422,17 @@ window.__ModuleLoader__.load({
           ? '夜间免费中（23:00–次日 8:00）'
           : fmtRate(meta.credits) + '（仅 23:00–次日 8:00 免费）')
       } else if (isHeavy) {
-        lines.push(fmtRate(meta.credits) + '，但单次实际消耗高（长上下文/高思考），非必要不用')
+        lines.push(fmtRate(meta.credits) + '，单次消耗高（长上下文/高思考，实际成本更高）')
       } else {
         lines.push(fmtRate(meta.credits) || '倍率未知')
       }
 
-      // ---- 1b) 能力边界提示 ----
-      // 效果差但免费：说明白「能用，但别拿它处理复杂问题」。
-      // 2026-10-22 用户反馈 hy3 系列效果不行，但要求仍因免费排在前面，
-      // 只在信息里标注——所以这是提示，不是降级。
-      if (isWeak) {
-        lines.push('⚠ 效果有限：简单任务可用；深奥/复杂问题效果不太行，建议换主力模型')
+      // ---- 1b) 适用场景 ----
+      // 正面描述「适合干什么」（用户 2026-10-22 明确要求不写负面评价）。
+      // 内容来自公开评测与社区反馈，与 recommend.js 的 SUITABILITY 同步。
+      const suit = SUITABILITY[modelId]
+      if (suit) {
+        lines.push('适合：' + suit)
       }
 
       // ---- 2) 上下文窗口 ----
