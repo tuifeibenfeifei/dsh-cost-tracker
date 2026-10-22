@@ -1,6 +1,6 @@
 {
   "name": "dsh-cost-tracker",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "displayName": "DSH Cost Tracker",
   "description": "DSH 多平台费用追踪：三平台余额挂件、分时段省钱推荐、按模型自动切换计费口径，阿里云抵用券余额校准，WorkBuddy 模型标签。",
   "type": "module",
