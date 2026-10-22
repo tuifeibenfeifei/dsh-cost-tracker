@@ -74,6 +74,16 @@ window.__ModuleLoader__.load({
      */
     let HEAVY_MODELS = ['space-bunny', 'glm-5.3', 'glm-5.3-flash']
 
+    /**
+     * 效果差的模型：便宜甚至免费，但复杂/深奥问题处理不好。
+     *
+     * ⚠️ 与 HEAVY_MODELS 不同：**不改变排序位置**。
+     * 2026-10-22 用户反馈 hy3 系列效果不行，但同时要求「因为免费，
+     * 所以还是要放在前面，但是要在模型信息提示深奥问题效果不太行」。
+     * 所以这里只加「效果有限」徽章，不动 tier 排序。
+     */
+    let WEAK_MODELS = ['hy3', 'hy3-x']
+
     /** 峰谷规则模型（上游不给 badge，按官方峰谷本地推算；可被配置覆盖） */
     let NIGHT_DISCOUNT = ['deepseek-v4.1-flash', 'deepseek-v4-pro']
 
@@ -91,6 +101,7 @@ window.__ModuleLoader__.load({
       if (Array.isArray(c.quotaModels) && c.quotaModels.length) QUOTA_MODEL = c.quotaModels.map(String)
       if (Array.isArray(c.peakModels) && c.peakModels.length) NIGHT_DISCOUNT = c.peakModels.map(String)
       if (Array.isArray(c.heavyModels)) HEAVY_MODELS = c.heavyModels.map(String)
+      if (Array.isArray(c.weakModels)) WEAK_MODELS = c.weakModels.map(String)
       // 促销说明：可选配置（promoDesc: { 模型id: 文案 }）；不配则悬停显示 badge 原文
       if (c.promoDesc && typeof c.promoDesc === 'object') {
         PROMO_DESC = {}
@@ -302,6 +313,17 @@ window.__ModuleLoader__.load({
         tags.push({ text, bg, title: text })
       }
 
+      // 效果有限：便宜/免费但复杂问题处理不好。
+      // 与「重型」（贵）分开——这个是能力边界提示，用琥珀色而非红色，
+      // 且**不影响排序**（hy3 系列仍因免费排在前面）。
+      if (WEAK_MODELS.indexOf(modelId) !== -1) {
+        tags.push({
+          text: '效果有限',
+          bg: '#b45309',
+          title: '简单任务可用；深奥/复杂问题效果不太行，建议换主力模型',
+        })
+      }
+
       // 峰谷折扣：按官方峰谷规则推算（模型清单可配置）。
       // 注意**不能叫「夜间折扣」**——非高峰包含中午 12-14、18-次日 9 点、
       // 以及周末与法定节假日全天，夜间只是其中一段。
@@ -368,6 +390,7 @@ window.__ModuleLoader__.load({
       const lines = []
       const isNightFree = (meta.badges || []).some((b) => String(b).indexOf('夜间免费') !== -1)
       const isHeavy = HEAVY_MODELS.indexOf(modelId) !== -1
+      const isWeak = WEAK_MODELS.indexOf(modelId) !== -1
 
       // ---- 1) 计费方式 ----
       // 重型模型要把「倍率低但实际贵」讲清楚：用户看到 x0.08 会疑惑它为什么
@@ -385,6 +408,14 @@ window.__ModuleLoader__.load({
         lines.push(fmtRate(meta.credits) + '，但单次实际消耗高（长上下文/高思考），非必要不用')
       } else {
         lines.push(fmtRate(meta.credits) || '倍率未知')
+      }
+
+      // ---- 1b) 能力边界提示 ----
+      // 效果差但免费：说明白「能用，但别拿它处理复杂问题」。
+      // 2026-10-22 用户反馈 hy3 系列效果不行，但要求仍因免费排在前面，
+      // 只在信息里标注——所以这是提示，不是降级。
+      if (isWeak) {
+        lines.push('⚠ 效果有限：简单任务可用；深奥/复杂问题效果不太行，建议换主力模型')
       }
 
       // ---- 2) 上下文窗口 ----
