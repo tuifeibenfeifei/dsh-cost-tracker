@@ -44,9 +44,16 @@ window.__ModuleLoader__.load({
      * tiers / quotaModels / peakModels 配置覆盖——每个人的模型清单不同，
      * 硬编码只是开箱示例。促销时间窗**不做硬编码**：上游 badge 本身就是
      * 实时状态（「夜间免费」「限时免费」），悬停直接展示 badge 文字。
+     *
+     * ⚠️ 2026-10-22 按 490 条真实请求重排：
+     *   - TIER_MAIN 原来放 deepseek-v4.1-flash，8 天烧掉 777 积分（36.5%）。
+     *     「主力」是使用频度分档，不是「贵模型」认证，不能把最贵的当主力推。
+     *   - TIER_COMMON 原来把 space-bunny / glm-5.3-flash 列为「常用」，
+     *     而它俩单次 18.75 / 15.16 积分，是最贵的两个常用模型。
+     *   现在按「实际花费 + 使用频度」重新分档。
      */
-    let TIER_MAIN = ['deepseek-v4.1-flash']
-    let TIER_COMMON = ['glm-5.3-flash', 'space-bunny', 'minimax-m2.7', 'hy4-preview']
+    let TIER_MAIN = ['step-5-preview', 'hy3']
+    let TIER_COMMON = ['hy4-preview', 'deepseek-v4.1-flash', 'hy3-x']
 
     /** 档位配色：高饱和实心块 */
     const TIER_VIEW = {
@@ -54,7 +61,18 @@ window.__ModuleLoader__.load({
       main:   { text: '主力', bg: '#1d4ed8' },
       common: { text: '常用', bg: '#b45309' },
       rare:   { text: '少用', bg: '#4b5563' },
+      // 重型模型：倍率不高但单次实际花得多（长上下文/高思考强度）。
+      // 2026-10-22 实测 space-bunny x0.08 单次 18.75、glm-5.3-flash x0.08 单次 15.16。
+      // 用暗红 + 描边感，让用户一眼看出「这个别乱用」。
+      heavy:  { text: '重型', bg: '#9f1239' },
     }
+
+    /**
+     * 高单次消耗模型：显示「重型」标签（可被配置覆盖）。
+     * 与 recommend.js 的 HEAVY_MODELS 保持一致——两处必须同步，
+     * 否则推荐里降权的模型在界面上没有对应标识。
+     */
+    let HEAVY_MODELS = ['space-bunny', 'glm-5.3', 'glm-5.3-flash']
 
     /** 峰谷规则模型（上游不给 badge，按官方峰谷本地推算；可被配置覆盖） */
     let NIGHT_DISCOUNT = ['deepseek-v4.1-flash', 'deepseek-v4-pro']
@@ -72,6 +90,7 @@ window.__ModuleLoader__.load({
       }
       if (Array.isArray(c.quotaModels) && c.quotaModels.length) QUOTA_MODEL = c.quotaModels.map(String)
       if (Array.isArray(c.peakModels) && c.peakModels.length) NIGHT_DISCOUNT = c.peakModels.map(String)
+      if (Array.isArray(c.heavyModels)) HEAVY_MODELS = c.heavyModels.map(String)
       // 促销说明：可选配置（promoDesc: { 模型id: 文案 }）；不配则悬停显示 badge 原文
       if (c.promoDesc && typeof c.promoDesc === 'object') {
         PROMO_DESC = {}
@@ -195,6 +214,10 @@ window.__ModuleLoader__.load({
       if (!isWorkbuddy(provider)) return null
       const id = String((model && model.id) || '')
       const meta = badgeCache && badgeCache[id]
+      // 重型优先于免费/主力/常用：这是「警告」性质的身份，必须最显眼。
+      // 免费模型也可能同时是重型（倍率 0 不放大成本，但 token 吃得多的
+      // 模型响应慢、额度消耗快），此时仍标重型。
+      if (HEAVY_MODELS.indexOf(id) !== -1) return 'heavy'
       if (meta && meta.free) return 'free'
       if (TIER_MAIN.indexOf(id) !== -1) return 'main'
       if (TIER_COMMON.indexOf(id) !== -1) return 'common'
@@ -344,14 +367,22 @@ window.__ModuleLoader__.load({
     function buildHoverLines(modelId, meta) {
       const lines = []
       const isNightFree = (meta.badges || []).some((b) => String(b).indexOf('夜间免费') !== -1)
+      const isHeavy = HEAVY_MODELS.indexOf(modelId) !== -1
 
       // ---- 1) 计费方式 ----
+      // 重型模型要把「倍率低但实际贵」讲清楚：用户看到 x0.08 会疑惑它为什么
+      // 排在 x0.11 的模型后面。倍率是每 token 单价，这类模型每次塞的 token
+      // 特别多，所以实际花费高得多。
       if (meta.free === true) {
-        lines.push('免费（当前不消耗积分）')
+        lines.push(isHeavy
+          ? '免费（当前不消耗积分），但单次消耗的额度/耗时偏高'
+          : '免费（当前不消耗积分）')
       } else if (isNightFree) {
         lines.push(isNightNow()
           ? '夜间免费中（23:00–次日 8:00）'
           : fmtRate(meta.credits) + '（仅 23:00–次日 8:00 免费）')
+      } else if (isHeavy) {
+        lines.push(fmtRate(meta.credits) + '，但单次实际消耗高（长上下文/高思考），非必要不用')
       } else {
         lines.push(fmtRate(meta.credits) || '倍率未知')
       }
