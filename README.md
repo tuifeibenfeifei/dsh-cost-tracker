@@ -420,6 +420,16 @@ dsh plugin --profile desktop add link:<本插件目录的绝对路径>
 | `turn/end` 不存在 | 用 `session/event` 分派 + `agent/turn-stopping` 兜底 |
 | `workspace.toast` 不可用 | key 域已满，冒泡提醒需改用 `shell.overlay` |
 | hy3 自动转付费 | `dsh-workbuddy-connect` 没实现，429 直接报错；上游参数名未知，未擅自猜测 |
+| `dsh-connect-workbuddy` 未登录 | 账号池返回 401 时全部功能不可用，面板顶部显示「缺少前置插件」指引（`/cost-tracker/dependency`） |
+| 上游 badge 用词不准 | WorkBuddy 给 deepseek 系模型的 badge 是「夜间折扣」，但官方规则是**峰谷**（工作日 9-12/14-18 高峰原价，其余谷时 5 折）。本插件在 `credits.js` 解析阶段就剔除该 badge，避免误导 |
+
+## 开发注意事项（踩过的坑）
+
+**改 UI 前先确认渲染者。​** 2026-10-23 排查「deepseek 显示夜间折扣」时，我假设标签由本插件渲染，在 `client.js` 反复修改、升版本号、清 Electron 缓存，始终无效；最终发现那个标签来自 DSH 内置插件 `@deepseek-ai/dsh-client-ui-deepseek-model-label-1017`，正确做法是在 `cordis.patch.yml` 里 `disabled: true`。​判断方法：看 DOM 里是否同时出现本插件的档位标签（`免费/主力/常用/重型`），没有就说明渲染者不是本插件。​
+
+**改 client.js 必须升 `package.json` 的 version。​** DSH 的 clientModules 按包名缓存 bundle，`lib/*.js`（宿主侧）改完重启即生效，但 `client.js` 只认版本号变化——不升版会持续加载旧 bundle，症状是「改了什么都没反应」。​
+
+**多个插件同时注册同一 slot 会互相干扰。​** `conversation.input.model.label` 是 single slot，本插件用 `priority: -10` 遮蔽原生渲染；若与其他插件冲突，先查对方是否也注册了同一 slot（`ctx.slots.inject` 的 key）。​
 
 ## 文件结构
 
@@ -430,10 +440,12 @@ dsh-cost-tracker/
 ├── lib/
 │   ├── index.js          # 宿主入口：事件 + 结算 + 路由 + 余额
 │   ├── pricing.js        # 三平台价目 + 峰谷判定
-│   ├── credits.js        # CreditTracker：积分余额差 + 健康检查
+│   ├── credits.js        # CreditTracker：积分余额差 + 健康检查 + 前置插件探测
 │   ├── aliyunCsv.js      # 代金券流水 CSV 解析与校准
-│   └── modelOrder.js     # WorkBuddy 四档排序 + 徽章文案
-├── client.js             # 前端：内联标签 + 悬停说明
+│   ├── modelOrder.js     # WorkBuddy 四档排序 + 徽章文案
+│   └── recommend.js      # 分时段省钱推荐引擎（重型模型降权 + 适用场景）
+├── client.js             # 前端：内联标签 + 悬停说明 + 气泡
+├── widget.js             # 页面挂件脚本
 ├── icon.svg
 ├── README.md
 └── LICENSE
@@ -441,6 +453,11 @@ dsh-cost-tracker/
 
 ## 版本
 
+- **0.5.3** — 数据源头剔除「夜间折扣」badge（deepseek 系改显示峰谷状态）；
+  新增「重型」标签与倍率放大排序（高单次消耗模型不再排在低价模型前）；
+  推荐算法按真实消耗数据重排档位；模型适用场景正面描述（基于公开评测）；
+  记账区阿里云不显示折算金额；气泡堆叠修复
+- **0.5.2** — 前置插件探测；版本号修正（DSH clientModules 缓存键）
 - **0.5.1** — 新增前置插件探测与安装指引（缺 WorkBuddy 连接插件时明确提示）；
   记账三组分开展示；阿里云不再显示折算金额（只统计轮次）；
   省钱建议改为常驻气泡 + 手动关闭；修复全局报错误标单模型限流
