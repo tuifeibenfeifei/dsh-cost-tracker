@@ -1575,6 +1575,38 @@ window.__ModuleLoader__.load({
               noticeListeners.forEach((fn) => fn())
             }
           }).catch(() => {})
+
+          // ---- 等待审批 / 回答 的提示 ----
+          // Agent 停下来等审批时会静默阻塞，用户离开电脑就不知道卡住了。
+          // 发现 seq 增加（新的等待出现）就响一声 + 弹常驻气泡。
+          // seq 是单调递增计数器，比时间戳可靠（同毫秒多次也不会漏）。
+          pFetch('/cost-tracker/pending').then((j) => {
+            if (!alive || !j || !j.ok) return
+            const p = j.pending
+            if (!p) {
+              // 等待已结束（审批完成或超时）→ 清掉气泡
+              if (noticeShared && noticeShared.pending) {
+                noticeShared.pending = null
+                noticeListeners.forEach((fn) => fn())
+              }
+              return
+            }
+            const prevSeq = noticeShared && typeof noticeShared.pendingSeq === 'number'
+              ? noticeShared.pendingSeq : 0
+            if (!noticeShared) noticeShared = { ledger: null, lastTurn: 0, key: '', toast: null }
+            noticeShared.pending = p
+            diag.pending = p.kind + ': ' + p.title
+            // 只有**新的**等待才响铃（同一等待不重复响）
+            if (p.seq !== prevSeq) {
+              noticeShared.pendingSeq = p.seq
+              // 用独立开关 pendingSoundOn：即使消费气泡音关着，审批提醒也要响
+              const _pref = readToastPref()
+              if (_pref.pendingSoundOn !== false) {
+                try { playNoticeSound({ ..._pref, soundOn: true }) } catch { /* 忽略 */ }
+              }
+              noticeListeners.forEach((fn) => fn())
+            }
+          }).catch(() => {})
         }
         poll()
         const t = setInterval(poll, NOTICE_POLL_MS)
@@ -1779,6 +1811,9 @@ window.__ModuleLoader__.load({
       // 消耗气泡按时长消失，建议气泡一直挂着直到用户确认。
       const [advShown, setAdvShown] = useState(null)
       const [advOff, setAdvOff] = useState(false)
+      // 记录「用户关掉的是哪一次等待」（存 seq）：同一次不重弹，
+      // 新的等待（seq 更大）仍会正常弹出。
+      const [pendingOffSeq, setPendingOff] = useState(0)
       // 订阅设置变化：用户在面板里改完，下一个气泡立刻按新样式出现
       const [pref, setPref] = useState(() => readToastPref())
       useEffect(() => {
@@ -1816,6 +1851,12 @@ window.__ModuleLoader__.load({
       const adviceLive = advShown && !advOff && advice
         && advice.level === advShown.level && advice.message === advShown.message
       const adviceCls = advice && advice.level === 'switch' ? 'dshctn-float spend' : 'dshctn-float info'
+
+      // 等待审批 / 回答：直接从共享状态读，seq 变了就重新显示（用户可能
+      // 关掉过一次，下一次新的等待还要再弹）。pendingOffSeq 记住「关掉的
+      // 是哪一次」，避免同一次等待被关掉后又弹回来。
+      const pending = noticeShared ? noticeShared.pending : null
+      const pendingLive = pending && pending.seq !== pendingOffSeq ? pending : null
 
       // ⚠️ 子气泡必须**去掉 position:fixed**。
       // toastStyle(pref) 带 position:fixed + top/left，子元素一旦 fixed 就脱离
@@ -1889,6 +1930,54 @@ window.__ModuleLoader__.load({
                   onClick: (e) => { e.stopPropagation(); setAdvOff(true) },
                   style: {
                     flex: '0 0 auto', border: 'none', background: 'rgba(255,255,255,0.18)',
+                    color: 'inherit', cursor: 'pointer', borderRadius: '4px',
+                    width: '22px', height: '22px', lineHeight: '20px', fontSize: '14px',
+                    padding: '0', textAlign: 'center',
+                  },
+                }, '×'),
+              ]),
+            ])
+          : null,
+        // ③ 等待审批 / 回答 气泡：常驻 + 手动关闭
+        // 这是「流程卡住了」的提示，优先级最高——Agent 停在那里等用户，
+        // 不处理就永远不往下走。用醒目的琥珀/红色 + 明确的行动指引。
+        pendingLive
+          ? h('div', {
+              key: 'pending',
+              className: 'dshctn-float spend',
+              role: 'alert',
+              style: {
+                ...childStyle, flexDirection: 'column', alignItems: 'stretch',
+                pointerEvents: 'auto',
+                borderWidth: '2px', borderStyle: 'solid',
+                background: 'rgba(146,64,14,.95)',
+                borderColor: '#fbbf24',
+                borderLeftColor: '#fbbf24',
+                color: '#fef3c7',
+              },
+            }, [
+              h('div', { key: 'row', style: { display: 'flex', alignItems: 'flex-start', gap: '6px' } }, [
+                h('div', { key: 'txt', style: { flex: 1, fontWeight: 700 } }, [
+                  h('div', { key: 't' }, '⏸ ' + pendingLive.title),
+                  pendingLive.detail
+                    ? h('div', {
+                        key: 'd',
+                        style: { marginTop: '3px', fontSize: '0.9em', fontWeight: 400, opacity: 0.92 },
+                      }, pendingLive.detail)
+                    : null,
+                  h('div', {
+                    key: 'hint',
+                    style: { marginTop: '4px', fontSize: '0.85em', fontWeight: 400, opacity: 0.8 },
+                  }, '请回到对话窗口处理'),
+                ]),
+                h('button', {
+                  key: 'close',
+                  type: 'button',
+                  title: '关闭提示',
+                  'aria-label': '关闭提示',
+                  onClick: (e) => { e.stopPropagation(); setPendingOff(pendingLive.seq) },
+                  style: {
+                    flex: '0 0 auto', border: 'none', background: 'rgba(255,255,255,0.2)',
                     color: 'inherit', cursor: 'pointer', borderRadius: '4px',
                     width: '22px', height: '22px', lineHeight: '20px', fontSize: '14px',
                     padding: '0', textAlign: 'center',
@@ -2177,6 +2266,11 @@ window.__ModuleLoader__.load({
       soundOn: false,     // 气泡出现时是否播放提示音（默认关，避免突然发声打扰）
       soundVol: 0.3,      // 音量 0–1
       soundKind: 'ping',  // ping（清脆短音）| coin（金币感）| soft（柔和）
+      // 等待审批 / 回答 的提示音：**默认开**，独立于 soundOn。
+      // 2026-10-23 用户要求：「等待审批也有提示音，提示我回来检查」——
+      // 这是「流程卡住」的告警，和「花了多少积分」的气泡音性质不同，
+      // 不能因为用户不想听消费提示音就一起静音了。
+      pendingSoundOn: true,
     }
 
     // ======================================================================
@@ -2253,6 +2347,7 @@ window.__ModuleLoader__.load({
             if (typeof o.dockAdvice === 'boolean') v.dockAdvice = o.dockAdvice
             if (typeof o.minHeightOn === 'boolean') v.minHeightOn = o.minHeightOn
             if (typeof o.soundOn === 'boolean') v.soundOn = o.soundOn
+            if (typeof o.pendingSoundOn === 'boolean') v.pendingSoundOn = o.pendingSoundOn
             if (Number(o.soundVol) >= 0) v.soundVol = Math.max(0, Math.min(1, Number(o.soundVol)))
             if (typeof o.soundKind === 'string') v.soundKind = o.soundKind
             if (Number(o.fontPx) > 0) v.fontPx = clampNum(o.fontPx, 8, 40, 0)
@@ -2517,6 +2612,16 @@ window.__ModuleLoader__.load({
               if (!pref.soundOn) playNoticeSound({ ...pref, soundOn: true })
             },
             'sound-toggle'),
+          // 审批提醒独立开关：默认开。Agent 停下来等审批时静默阻塞，
+          // 用户离开电脑就不知道流程卡住了——这是告警，不该跟消费气泡音共用开关。
+          chip(pref.pendingSoundOn !== false ? '✓ 等待审批时响一声' : '等待审批时响一声（已关闭）',
+            pref.pendingSoundOn !== false,
+            () => {
+              const next = !(pref.pendingSoundOn !== false)
+              writeToastPref({ pendingSoundOn: next })
+              if (next) playNoticeSound({ ...pref, soundOn: true })
+            },
+            'pending-sound-toggle'),
         ]),
         h('div', { key: 'sndrow', className: 'dshctp-numrow', style: { marginTop: '6px' } }, [
           h('label', { key: 'vol', className: 'dshctp-num' }, [
