@@ -481,6 +481,8 @@ dsh plugin --profile desktop add link:<本插件目录的绝对路径>
 | `turn/end` 不存在 | 用 `session/event` 分派 + `agent/turn-stopping` 兜底 |
 | `workspace.toast` 不可用 | key 域已满，冒泡提醒需改用 `shell.overlay` |
 | hy3 自动转付费 | `dsh-workbuddy-connect` 没实现，429 直接报错；上游参数名未知，未擅自猜测 |
+| 限流状态依赖插件探测缓存 | 自身只在「请求失败」时记录限流，**重启即丢**。现从 `$DSH_HOME/.workbuddy-pool.cn.json` 同步（启动时 + 每 5 分钟），该文件缺失或插件未探测时退回失败事件记录 |
+| `advice` 换模型提示 | 必须用 `effectiveRate()` 的**实际倍率**比较；当前模型实际免费时**绝不**提示切到付费模型（硬约束） |
 | `dsh-connect-workbuddy` 未登录 | 账号池返回 401 时全部功能不可用，面板顶部显示「缺少前置插件」指引（`/cost-tracker/dependency`） |
 | 上游 badge 用词不准 | WorkBuddy 给 deepseek 系模型的 badge 是「夜间折扣」，但官方规则是**峰谷**（工作日 9-12/14-18 高峰原价，其余谷时 5 折）。本插件在 `credits.js` 解析阶段就剔除该 badge，避免误导 |
 
@@ -491,6 +493,14 @@ dsh plugin --profile desktop add link:<本插件目录的绝对路径>
 **改 client.js 必须升 `package.json` 的 version。​** DSH 的 clientModules 按包名缓存 bundle，`lib/*.js`（宿主侧）改完重启即生效，但 `client.js` 只认版本号变化——不升版会持续加载旧 bundle，症状是「改了什么都没反应」。​
 
 **多个插件同时注册同一 slot 会互相干扰。​** `conversation.input.model.label` 是 single slot，本插件用 `priority: -10` 遮蔽原生渲染；若与其他插件冲突，先查对方是否也注册了同一 slot（`ctx.slots.inject` 的 key）。​
+
+**比倍率时两边必须同基准。​** 2026-10-23 23:53 实测（夜间）：hy4 `free=true rate=0 discount=夜间免费生效中`，deepseek `rate=0.055`。但 `advice` 说「hy4（x0.29）比 deepseek（x0.055）贵」——因为旧代码用 `cur.credits`（上游**原始倍率**）比 `best.rate`（**时段折算后**的实际倍率）。修复：当前模型也走 `effectiveRate()`，并加硬约束「当前模型实际免费时，绝不提示切到付费模型」。​
+
+**状态类信息优先从权威来源同步，别只靠自己攒。​** 限流标记原本只在「请求失败」时写，重启即丢——导致明明还在限流的 deepseek 被当可用，继续推荐给用户（2026-10-23 实测）。插件自己有权威探测结果：`$DSH_HOME/.workbuddy-pool.cn.json` 的 `probes.<accountId>` 明确记录 `outcome / modelId / retryAtMs`。直接采信它，启动 + 定时同步，比重放失败事件可靠得多。​
+
+**归因优先级：`p.model` 优先。​** 用户先用 hy4 发一条、秒切 deepseek 后收到 429，旧逻辑兜底取「会话内最近跑过的模型 = hy4」，把 deepseek 的限流记到 hy4 头上（实测 `probe hy4 → ok`，真正限流的是 deepseek）。`agent/request-error` 的 payload 对应**本次**请求，`p.model` 就是真正在跑的模型。顺序：`p.model` → 错误文本里的模型名 → 最近跑过的。​
+
+**别用互斥条件做「全局错误」过滤。​** 旧代码写 `&& !/soft_rate|429|频率限制/` 来排除正常限流，结果真正的池级限流（`code 6004` + `soft_rate` + 「池中已无可用账号」）被整个放过。池级特征应**单独一条规则**优先匹配，而不是用否定式互斥。​
 
 ## 文件结构
 
@@ -514,6 +524,10 @@ dsh-cost-tracker/
 
 ## 版本
 
+- **0.5.5** — `advice` 改用实际倍率比较（当前模型实际免费时绝不提示切到付费）；
+  新增从插件探测缓存同步限流状态（`.workbuddy-pool.cn.json`），解决重启后
+  限流丢失导致继续推荐已限流模型；失败归因改为 `p.model` 优先（修复秒切模型后
+  限流记到上一个模型）；账号池级限流不再归因到单个模型
 - **0.5.4** — 等待审批/回答时响提示音 + 弹常驻气泡（监听 `approval/request`
   与 `user-questions/request`，新增 `/cost-tracker/pending` 轮询接口，
   独立开关 `pendingSoundOn` 默认开）
