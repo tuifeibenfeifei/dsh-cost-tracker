@@ -298,6 +298,66 @@ curl -X POST http://127.0.0.1:<port>/cost-tracker/model-state \
   -d '{"model":"hy3","state":"exhausted","hours":12}'
 ```
 
+### 9. 等待审批 / 回答 的提示音与气泡
+
+**问题**：Agent 执行到需要审批（工具调用确认）或结构化提问时会**静默阻塞**。
+如果你离开电脑，完全不知道流程卡在那里，任务就一直停着。
+
+**做法**：监听两个 Host 事件，记录「正在等待什么」，前端轮询后响铃 + 弹常驻气泡。
+
+```
+Agent 停下等审批
+  ↓
+Host 监听 approval/request / user-questions/request
+  ↓ 记录 kind + title + detail，seq++，然后立刻 next() 放行
+  ↓
+GET /cost-tracker/pending  ← 前端每 8 秒轮询
+  ↓ 发现 seq 变大 → 响提示音 + 弹气泡
+```
+
+**⚠️ waterfall 事件必须放行。** `approval/request` 和 `user-questions/request`
+都是 **waterfall** 模式，监听器必须调用 `next()`，否则整条审批链会挂起，
+Agent 永远等不到结果。所以这里只做「记录状态」，绝不拦截、不修改结果：
+
+```js
+disposers.push(ctx.on('approval/request', (req, next) => {
+  try { pendingGate.note('approval', req) } catch { /* 记录失败不影响审批 */ }
+  return next()   // ← 必须放行
+}))
+```
+
+**用 `seq` 而不是时间戳去重。** `seq` 是单调递增计数器，前端记住上次见到的值，
+变化了就是**新的**等待。比时间戳可靠——同一毫秒内多次请求也不会漏。
+
+**10 分钟自动过期。** 后端拿不到「用户已处理」的可靠信号（waterfall 只给了
+`next()` 的返回值，无法区分批准/拒绝），所以等待状态 10 分钟后自动失效，
+避免气泡永久挂在屏幕上。
+
+**提示音独立开关 `pendingSoundOn`（默认开）。** 消费气泡的提示音（`soundOn`）
+默认关着，避免突然发声；但审批提醒是**告警**性质——用户离开电脑时正是最需要
+它响的时候，不能因为关掉了消费提示音就一起静音。
+
+| 配置项 | 默认 | 说明 |
+|---|---|---|
+| `pendingSoundOn` | `true` | 等待审批时是否响一声（独立于 `soundOn`） |
+| `soundVol` | `0.3` | 音量 0–1（两者共用） |
+| `soundKind` | `'ping'` | 音色：`ping` / `coin` / `soft`（共用） |
+
+**气泡样式**：琥珀底 + 加粗黄框 + 明确指引，与「本轮消耗」「省钱建议」气泡
+视觉区分，且常驻不自动消失（带 × 手动关闭）：
+
+```
+┌──────────────────────────────────────┐
+│ ⏸ 需要审批：bash                      │
+│   rm -rf /tmp/build                   │
+│   请回到对话窗口处理                    │
+│                                  [×]  │
+└──────────────────────────────────────┘
+```
+
+**已知限制**：浏览器自动播放策略要求页面先有过一次用户交互（点一下页面），
+否则首次提示音可能被静默拦截。
+
 ## 配置（通用化）
 
 插件开箱即用（内置一份默认模型清单），但**每个人的模型、倍率、常用度都不同**。
@@ -336,6 +396,7 @@ curl -X POST http://127.0.0.1:<port>/cost-tracker/model-state \
 | `/cost-tracker/turns` | GET | 每轮消耗明细（`?limit=50&platform=workbuddy`） |
 | `/cost-tracker/health` | GET | WorkBuddy 账号健康（顺带采样）+ 前置插件状态 |
 | `/cost-tracker/dependency` | GET | 前置插件（WorkBuddy 连接插件）探测状态；`?force=1` 跳过 60 秒缓存 |
+| `/cost-tracker/pending` | GET | 等待用户操作（审批/提问）的状态；`seq` 变化即有新等待 |
 | `/cost-tracker/aliyun` | GET | 阿里云抵用券余额视图 |
 | `/cost-tracker/aliyun/calibrate` | POST | 用官方 CSV 校准抵用券余额 |
 | `/cost-tracker/deepseek-balance` | GET | 官方余额；`?force=1` 跳过 60 秒缓存 |
@@ -453,6 +514,9 @@ dsh-cost-tracker/
 
 ## 版本
 
+- **0.5.4** — 等待审批/回答时响提示音 + 弹常驻气泡（监听 `approval/request`
+  与 `user-questions/request`，新增 `/cost-tracker/pending` 轮询接口，
+  独立开关 `pendingSoundOn` 默认开）
 - **0.5.3** — 数据源头剔除「夜间折扣」badge（deepseek 系改显示峰谷状态）；
   新增「重型」标签与倍率放大排序（高单次消耗模型不再排在低价模型前）；
   推荐算法按真实消耗数据重排档位；模型适用场景正面描述（基于公开评测）；
