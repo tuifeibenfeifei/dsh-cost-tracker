@@ -99,6 +99,20 @@ window.__ModuleLoader__.load({
     }
 
     /** 峰谷规则模型（上游不给 badge，按官方峰谷本地推算；可被配置覆盖） */
+    /**
+     * 峰谷规则模型：**只放真正遵循官方峰谷规则的模型**。
+     *
+     * 2026-10-23 用户明确要求：「deepseek 不要有夜间折扣这个标签，只要有谷、峰期」。
+     * 上游 badge 的「夜间折扣」会让人以为只有半夜才打折，而 deepseek 官方规则是
+     * 工作日 9-12/14-18 高峰原价，其余（含中午、晚间、周末、法定节假日全天）
+     * 谷时 5 折——「谷时5折 / 高峰原价」才是用户需要的决策信息。
+     * 所以这些模型过滤掉上游折扣 badge，强制走本地峰谷推算。
+     *
+     * ⚠️ glm-5.2 也曾带「夜间折扣」badge，但**没有纳入本清单**：
+     * 峰谷规则是 DeepSeek 官方的，不能假设智谱模型遵循同一套规则，
+     * 更不能替它虚构 5 折——倍率算错比标签含糊更糟。glm-5.2 的
+     * 「夜间折扣」是上游实时状态，按 badge 原样展示。
+     */
     let NIGHT_DISCOUNT = ['deepseek-v4.1-flash', 'deepseek-v4-pro']
 
     /** 每日赠额类模型：显示「额度限制」标签（可被配置覆盖） */
@@ -314,7 +328,15 @@ window.__ModuleLoader__.load({
       tags.push({ text: view.text, bg: view.bg, title: '使用频度分档' })
 
       // 促销：上游 badges 实时值（badge 文字本身即实时状态，不做时间窗硬编码）
+      // ⚠️ deepseek 系（NIGHT_DISCOUNT 清单）例外：上游给的是「夜间折扣」，
+      // 但它实际遵循的是官方峰谷规则——工作日 9-12/14-18 高峰原价，
+      // 其余（含中午、晚间、周末、法定节假日全天）谷时 5 折。
+      // 「夜间折扣」会让人以为只有半夜才打折，中午和晚间也打折却看不出来。
+      // 2026-10-23 用户反馈「应该提示谷期和峰期，而不是夜间折扣」——
+      // 所以这类模型跳过上游 badge，改走下面的峰谷推算。
       const badges = Array.isArray(meta.badges) ? meta.badges : []
+        .filter((b) => NIGHT_DISCOUNT.indexOf(modelId) === -1
+          || String(b).indexOf('折扣') === -1)
       for (const b of badges) {
         if (!b) continue
         const text = String(b)
@@ -329,7 +351,7 @@ window.__ModuleLoader__.load({
       // 峰谷折扣：按官方峰谷规则推算（模型清单可配置）。
       // 注意**不能叫「夜间折扣」**——非高峰包含中午 12-14、18-次日 9 点、
       // 以及周末与法定节假日全天，夜间只是其中一段。
-      if (NIGHT_DISCOUNT.indexOf(modelId) !== -1 && !badges.some(b => String(b).indexOf('折扣') !== -1)) {
+      if (NIGHT_DISCOUNT.indexOf(modelId) !== -1) {
         const offPeak = isOffPeakNow()
         tags.push({
           text: offPeak ? '谷时5折' : '高峰原价',
@@ -1795,6 +1817,24 @@ window.__ModuleLoader__.load({
         && advice.level === advShown.level && advice.message === advShown.message
       const adviceCls = advice && advice.level === 'switch' ? 'dshctn-float spend' : 'dshctn-float info'
 
+      // ⚠️ 子气泡必须**去掉 position:fixed**。
+      // toastStyle(pref) 带 position:fixed + top/left，子元素一旦 fixed 就脱离
+      // 文档流，外层 flex 的 gap/排列全部失效——两个气泡会按同一个 top/left
+      // 叠在一起（2026-10-23 用户实测：建议气泡与消耗气泡重叠）。
+      // 父容器 .dshctn-stack 已经是 fixed + flex column + gap，子元素用
+      // position:'relative' 回归流内，由 flex 依次排列。
+      const childStyle = { ...toastStyle(pref) }
+      delete childStyle.position
+      delete childStyle.top
+      delete childStyle.left
+      delete childStyle.right
+      delete childStyle.bottom
+      delete childStyle.transform
+      delete childStyle.zIndex
+      childStyle.position = 'relative'
+      childStyle.width = '100%'
+      childStyle.boxSizing = 'border-box'
+
       return h('div', {
         className: 'dshctn-stack',
         style: {
@@ -1807,6 +1847,10 @@ window.__ModuleLoader__.load({
                   : { left: 'var(--dshctn-toast-left,272px)', top: '50%', transform: 'translateY(-50%)' })))),
           display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'stretch',
           pointerEvents: 'none',
+          // 限制整叠气泡的最大宽度：子气泡 width:100% 会撑满这个容器，
+          // 没有上限时会占满半个屏幕。
+          maxWidth: ((pref.custom || {}).width > 0 ? (pref.custom || {}).width
+            : (pref.size === 'large' ? 420 : pref.size === 'small' ? 220 : 300)),
         },
       }, [
         // ① 本轮消耗气泡（按时长消失）
@@ -1817,7 +1861,7 @@ window.__ModuleLoader__.load({
                 : (shown.kind === 'free' ? 'dshctn-float free'
                   : (shown.kind === 'pending' ? 'dshctn-float pending' : 'dshctn-float info')),
               role: 'status',
-              style: { ...toastStyle(pref), flexDirection: 'column', alignItems: 'stretch', pointerEvents: 'auto' },
+              style: { ...childStyle, flexDirection: 'column', alignItems: 'stretch', pointerEvents: 'auto' },
             }, [
               h('div', { key: 'main' }, iconOf(shown.kind) + shown.text),
             ])
@@ -1829,7 +1873,7 @@ window.__ModuleLoader__.load({
               className: adviceCls,
               role: 'alert',
               style: {
-                ...toastStyle(pref), flexDirection: 'column', alignItems: 'stretch',
+                ...childStyle, flexDirection: 'column', alignItems: 'stretch',
                 pointerEvents: 'auto',
                 borderWidth: '2px', borderStyle: 'solid',
               },
