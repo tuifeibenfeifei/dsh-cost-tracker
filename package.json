@@ -29,6 +29,9 @@
     "aliyun"
   ],
   "license": "MIT",
+  "scripts": {
+    "test": "node test/credits.test.mjs"
+  },
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
   },
