@@ -52,8 +52,10 @@ window.__ModuleLoader__.load({
      *     而它俩单次 18.75 / 15.16 积分，是最贵的两个常用模型。
      *   现在按「实际花费 + 使用频度」重新分档。
      */
-    let TIER_MAIN = ['step-5-preview', 'hy3']
-    let TIER_COMMON = ['hy4-preview', 'deepseek-v4.1-flash', 'hy3-x']
+    // 2026-11-05 WorkBuddy 更新：hy4-preview 拆成 hy4free（免费版）/hy4std（标准版）。
+    // 两者 name 都叫「Hy4」，靠下面的 DISPLAY_SUFFIX 在下拉里区分。
+    let TIER_MAIN = ['hy4free', 'hy3', 'step-5-preview']
+    let TIER_COMMON = ['hy4std', 'deepseek-v4.1-flash', 'hy3-x']
 
     /** 档位配色：高饱和实心块 */
     const TIER_VIEW = {
@@ -72,7 +74,7 @@ window.__ModuleLoader__.load({
      * 与 recommend.js 的 HEAVY_MODELS 保持一致——两处必须同步，
      * 否则推荐里降权的模型在界面上没有对应标识。
      */
-    let HEAVY_MODELS = ['space-bunny', 'glm-5.3', 'glm-5.3-flash']
+    let HEAVY_MODELS = ['space-bunny', 'minimax-m3.1-flash', 'minimax-m3', 'glm-5.3', 'glm-5.3-flash']
 
     /**
      * 模型适用场景（正面描述「适合干什么」）。
@@ -84,16 +86,25 @@ window.__ModuleLoader__.load({
      * 「标签不要太多」，档位（免费/主力/常用/重型）+ 上游 badge 已经够多了。
      */
     const SUITABILITY = {
-      'step-5-preview': '长程 Agent、复杂软件工程、金融分析、深度研究',
-      'hy4-preview': '长文档、大代码库、跨文件分析、带排版的 PPT/表格',
+      // 与 recommend.js 的 SUITABILITY 保持一致——两处必须同步。
+      // 2026-11-05 更新：hy4-preview → hy4free / hy4std；补齐新模型。
+      'hy4free': '长文档、大代码库、跨文件分析、带排版的 PPT/表格',
+      'hy4std': '长文档、大代码库、跨文件分析、带排版的 PPT/表格',
       'hy3': '日常办公、高频问答、简单内容处理',
       'hy3-x': '日常办公、高频问答（Hy3 额度用尽后的付费延续）',
+      'deepseek-v4.1-flash': '编码、Agent 工作流、长上下文检索、成本敏感的重复调用',
+      'deepseek-v4-pro': '复杂推理、高质量编码、长程 Agent 交付',
+      'glm-5.2': '编码任务、错峰批处理（夜间 23:00 后 5 折更省）',
       'glm-5.3-flash': '文档/PDF 推理、多模态读图、高吞吐后台批处理',
       'glm-5.3': '编码/终端 Agent、凭记忆的事实问答、正式交付物',
-      'deepseek-v4.1-flash': '编码、Agent 工作流、长上下文检索、成本敏感的重复调用',
+      'kimi-k3.1-pro': '编码/长程 Agent、3D 建模与 CAD、金融建模与投研、严谨事实核查',
+      'kimi-k3-1': '长文档问答、通用对话、大上下文检索',
+      'kimi-k2.8-preview': '通用问答、轻量 Agent 任务',
+      'mimo-v2.6-pro': '3D 空间推理、多模态感知、低成本批量任务',
       'space-bunny': '跨 SaaS 业务流自动化、软件工程、电脑操作、安全审计',
       'minimax-m3.1-flash': '跨 SaaS 业务流自动化、软件工程、电脑操作、安全审计',
       'minimax-m3': '跨 SaaS 业务流自动化、软件工程、电脑操作',
+      'step-5-preview': '长程 Agent、复杂软件工程、金融分析、深度研究',
       'wb-lite': '极简问答、格式转换',
       'hy-image3.5-preview': '图片生成',
     }
@@ -115,8 +126,9 @@ window.__ModuleLoader__.load({
      */
     let NIGHT_DISCOUNT = ['deepseek-v4.1-flash', 'deepseek-v4-pro']
 
-    /** 每日赠额类模型：显示「额度限制」标签（可被配置覆盖） */
-    let QUOTA_MODEL = ['hy3']
+    /** 每日赠额类模型：显示「额度限制」标签（可被配置覆盖）。
+     *  2026-11-05：hy4free 也是「每日赠送免费额度」的限免模型。 */
+    let QUOTA_MODEL = ['hy4free', 'hy3']
 
     /** 应用宿主下发的配置（/models 路由的 tiers / quotaModels / peakModels） */
     let PROMO_DESC = {}
@@ -269,6 +281,23 @@ window.__ModuleLoader__.load({
       return i === -1 ? s : s.slice(0, i).trim()
     }
 
+    /**
+     * 同名变体的可区分显示名后缀（2026-11-05 WorkBuddy 更新）。
+     *
+     * 上游把 Hy4 拆成 hy4free（限时免费·每日赠额）与 hy4std（x0.29 标准版），
+     * 把 Hy3 拆成 hy3（限时免费）与 hy3-x（x0.05 付费版）。**四个 ID 的 name
+     * 完全相同**（都叫 "Hy4" / "Hy3"），baseName 又砍掉倍率后缀，下拉列表里
+     * 就成了两个一模一样的「Hy4」、两个一模一样的「Hy3」——用户反馈
+     * 「这两个模型在模型列表同时有两个」。它们确实是不同模型（计费档不同），
+     * 不该合并，但必须能一眼区分。用 modelId 补一个后缀即可。
+     */
+    const DISPLAY_SUFFIX = {
+      'hy4free': ' · 免费版',
+      'hy4std': ' · 标准版',
+      'hy3': ' · 免费版',
+      'hy3-x': ' · 付费版',
+    }
+
     /** 0.11x 倍率 */
     function fmtRate(credits) {
       const s = String(credits || '').trim()
@@ -397,7 +426,7 @@ window.__ModuleLoader__.load({
      * 为什么重写：以前只有「倍率 + 促销 + 可用状态」三行，且：
      *   - 上下文窗口（决定能塞多长的历史）一个字都不提
      *   - 「每天送多少免费额度」只有 hy3/step-5-preview 两个手写文案
-     *   - 免费时段型模型（hy4-preview）不显示时段就一句笼统的「免费」
+     *   - 免费时段型模型（旧 hy4-preview，现已拆成 hy4free/hy4std）不显示时段就一句笼统的「免费」
      *   - 用户自己花了多少在这个模型上，完全不显示
      * 用户要求「每一个 workbuddy 模型都告诉我模型信息」，所以这里按
      * 统一模板输出，缺的字段自动跳过，不会出现空白行。
@@ -463,18 +492,23 @@ window.__ModuleLoader__.load({
       } else if (NIGHT_DISCOUNT.indexOf(modelId) !== -1) {
         lines.push('周一至周五 09:00–12:00、14:00–18:00 属高峰原价；中午、晚间与周末节假日为谷时 5 折')
       } else if (meta.badges && meta.badges.length) {
-        // badge 是上游实时状态（夜间免费/限时折扣/订阅优先/独家限免…）。
+        // badge 是上游实时状态（限时免费/夜间折扣/订阅优先/限时折扣…）。
         // 本地不编造时间窗——那些日期会过期且与上游不同步。
-        // ⚠️ 已被第 3 段覆盖的徽标（夜间免费 / 每日赠额型）不再重复：
-        // 否则 hy4-preview 的「夜间免费」会先在「免费时段…」讲一遍，
-        // 这里又原样讲一遍、还追加「⚠ 限时活动」，同一信息出现三次。
-        // 只展示未被第 3 段覆盖的促销（限时折扣/订阅优先/独家限免等）。
+        // ⚠️ 已被第 3 段覆盖的「夜间免费」不再重复，否则同一信息出现多次。
         const extra = meta.badges
           .map(String)
           .filter((b) => !(isNightFree && b.indexOf('夜间免费') !== -1))
         if (extra.length) {
           lines.push(extra.join(' · '))
-          if (extra.some((b) => /限|免费|折扣/.test(b))) {
+          // 2026-11-05：glm-5.2 等真实「夜间折扣」是**每日周期**促销
+          // （每晚 23:00—次日 8:00 五折，discount.multiplier=0.5），
+          // 不是限期活动——补准确时段，但别误报「结束后恢复原价」。
+          // 上游 promo.hover 原文即「每晚 23:00—次日 8:00 积分限时立减，错峰用更省」。
+          if (extra.some((b) => b.indexOf('夜间折扣') !== -1)) {
+            lines.push('每晚 23:00 — 次日 08:00 积分 5 折，错峰用更省')
+          }
+          // 「⚠ 限时活动」只对真正有期限的促销（限时/限免/独家）生效。
+          if (extra.some((b) => /限时|限免|独家/.test(b))) {
             lines.push('⚠ 限时活动：有期限限制，结束后恢复原价/按倍率计费，以官方公告为准')
           }
         }
@@ -709,7 +743,10 @@ window.__ModuleLoader__.load({
       }, [])
 
       const rawName = String((model && model.name) || '')
-      const name = baseName(rawName) || rawName
+      const modelId = String((model && model.id) || '')
+      const base = baseName(rawName) || rawName
+      // 同名变体（hy4free/hy4std、hy3/hy3-x）补可区分后缀。
+      const name = (DISPLAY_SUFFIX[modelId] ? base + DISPLAY_SUFFIX[modelId] : base)
 
       // ===== 关键：非下拉列表位置一律原样返回 =====
       if (placement !== 'option') return rawName
@@ -718,7 +755,6 @@ window.__ModuleLoader__.load({
       const tier = tierOf(provider, model)
       if (tier === null) return rawName
 
-      const modelId = String((model && model.id) || '')
       const meta = (badgeCache && badgeCache[modelId]) || {}
       const tags = buildTags(tier, modelId, meta)
 
@@ -1517,7 +1553,7 @@ window.__ModuleLoader__.load({
               let text
               let kind = 'info'
               // ⚠️ allFree 必须**优先**于 reason 判断。
-              // 实测（2026-10-22 23:12，hy4-preview 夜间免费轮）：
+              // 实测（2026-10-22 23:12，旧 hy4-preview 夜间免费轮）：
               // 免费轮本来就该 spent=0，reason 于是落到 zero-pending，
               // 若先判 reason 就会显示「本轮积分未入账」——把没花钱的
               // 一轮说成账没算清，是误导。免费轮应直接说「本轮免费」。

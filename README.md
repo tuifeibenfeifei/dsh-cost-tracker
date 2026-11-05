@@ -9,7 +9,7 @@ DeepSeek Harness（DSH）多平台费用追踪插件：**按模型自动切换�
 
 | 优先级 | 平台 | 花的是什么钱 | 适用场景 |
 |---|---|---|---|
-| 第 1 | WorkBuddy 免费模型 | **不花钱** | `hy3`、`step-5-preview`，长短任务都能用 |
+| 第 1 | WorkBuddy 免费模型 | **不花钱** | `hy4free`（每日赠额）、`hy3`（限时免费），长短任务都能用 |
 | 第 2 | 阿里云百炼 | **虚拟钱**（抵用券） | **长任务 / 大上下文优先**，100 万上下文 |
 | 第 3 | WorkBuddy 付费模型 | **免费积分**（每日可再生） | 短对话 |
 | 第 4 | DeepSeek 官方 | **真钱** | 最后才用，花一分少一分 |
@@ -23,7 +23,7 @@ DeepSeek Harness（DSH）多平台费用追踪插件：**按模型自动切换�
 WorkBuddy 长任务 token 消耗极大（实测单轮 311 万 / 607 万 token）。
 付费模型倍率一乘，积分掉得极快。所以：
 
-- **长任务 → 阿里云**（抵用券够用；或 `step-5-preview`，免费且 100 万上下文）
+- **长任务 → 阿里云**（抵用券够用；或 `hy4free`，限时免费且 96 万上下文）
 - **短对话 → WorkBuddy 付费模型**（花积分，不心疼）
 
 ### 三个平台的时段规则不同
@@ -129,17 +129,25 @@ Kimi-K3-1           [少 用]
 
 | 档位 | 颜色 | 含义 |
 |---|---|---|
-| 免费 | 深绿 `#15803d` | `free === true` |
-| 主力 | 深蓝 `#1d4ed8` | `deepseek-v4.1-flash` |
-| 常用 | 深橙 `#b45309` | `glm-5.3-flash`、`space-bunny`、`minimax-m2.7`、`hy4-preview` |
+| 免费 | 深绿 `#15803d` | `free === true`（hy4free、hy3） |
+| 主力 | 深蓝 `#1d4ed8` | `hy4free`、`hy3`、`step-5-preview` |
+| 常用 | 深橙 `#b45309` | `hy4std`、`deepseek-v4.1-flash`、`hy3-x` |
 | 少用 | 深灰 `#4b5563` | 其余 |
+
+> 2026-11-05 WorkBuddy 更新：`hy4-preview` 拆成 `hy4free`（免费版）/`hy4std`（标准版），
+> `hy3` 与 `hy3-x` 同为 Hy3 两个计费档。上游 `name` 完全相同，下拉里用
+> ` · 免费版` / ` · 标准版` / ` · 付费版` 后缀区分（见 `client.js` 的 `DISPLAY_SUFFIX`）。
 
 **促销标签**：来自上游 `badges`（实时，不硬编码免费时间表）
 
 **夜间折扣**：`deepseek-v4.1-flash` / `deepseek-v4-pro` 上游不给 badge，
 按官方峰谷规则本地推算，每分钟重算——非高峰显示 `夜 间 折 扣`，高峰显示 `高 峰 原 价`
 
-**额度限制**：`hy3`（每日赠额，用尽后转付费）
+**额度限制**：`hy4free`、`hy3`（每日赠额，用尽后等次日重置）
+
+**夜间折扣**：`glm-5.2` 是**真实**每晚 23:00—次日 8:00 五折
+（`discount.multiplier=0.5`），badge 原样保留并在悬停补时段说明；
+deepseek 系的「夜间折扣」因与官方峰谷规则冲突，在 `credits.js` 解析时按模型剔除。
 
 **限流标记**：被限流/额度用尽的模型直接显示红底「限 流」标签，
 不用悬停也能一眼看出不能用；悬停显示精确恢复时间 + 每秒跳动的倒计时。
@@ -397,16 +405,16 @@ disposers.push(ctx.on('approval/request', (req, next) => {
         # 遵循「工作日 9-12/14-18 高峰原价、其余谷价」的模型
         peakModels: [deepseek-v4.1-flash, deepseek-v4-pro]
         # 每日赠额型模型（额度用尽转 429/付费）
-        quotaModels: [hy3]
+        quotaModels: [hy4free, hy3]
         # 推荐排序的同分优先项
-        preferred: [deepseek-v4.1-flash, glm-5.3-flash]
+        preferred: [hy4free, hy3, deepseek-v4.1-flash]
         # 标签档位
         tiers:
-          main: [deepseek-v4.1-flash]
-          common: [glm-5.3-flash, space-bunny]
+          main: [hy4free, hy3, step-5-preview]
+          common: [hy4std, deepseek-v4.1-flash, hy3-x]
         # 促销时间窗说明（可选；不配则悬停显示上游 badge 原文）
         promoDesc:
-          hy4-preview: 每晚 23:00—次日 8:00 享免费额度（以官方公告为准）。
+          glm-5.2: 每晚 23:00—次日 8:00 积分 5 折，错峰用更省。
 ```
 
 不配置也能跑：内置清单作为开箱示例；但推荐排序与档位标签
@@ -510,7 +518,7 @@ dsh plugin --profile desktop add link:<本插件目录的绝对路径>
 | 限流状态依赖插件探测缓存 | 自身只在「请求失败」时记录限流，**重启即丢**。现从 `$DSH_HOME/.workbuddy-pool.cn.json` 同步（启动时 + 每 5 分钟），该文件缺失或插件未探测时退回失败事件记录 |
 | `advice` 换模型提示 | 必须用 `effectiveRate()` 的**实际倍率**比较；当前模型实际免费时**绝不**提示切到付费模型（硬约束） |
 | `dsh-connect-workbuddy` 未登录 | 账号池返回 401 时全部功能不可用，面板顶部显示「缺少前置插件」指引（`/cost-tracker/dependency`） |
-| 上游 badge 用词不准 | WorkBuddy 给 deepseek 系模型的 badge 是「夜间折扣」，但官方规则是**峰谷**（工作日 9-12/14-18 高峰原价，其余谷时 5 折）。本插件在 `credits.js` 解析阶段就剔除该 badge，避免误导 |
+| 上游 badge 用词不准 | WorkBuddy 给 deepseek 系模型的 badge 是「夜间折扣」，但官方规则是**峰谷**（工作日 9-12/14-18 高峰原价，其余谷时 5 折）。本插件在 `credits.js` 解析阶段**仅对 deepseek 系**剔除该 badge（glm-5.2 的真实夜间五折必须保留），避免误导 |
 
 ## 开发注意事项（踩过的坑）
 
@@ -575,6 +583,11 @@ dsh-cost-tracker/
 - **0.5.4** — 等待审批/回答时响提示音 + 弹常驻气泡（监听 `approval/request`
   与 `user-questions/request`，新增 `/cost-tracker/pending` 轮询接口，
   独立开关 `pendingSoundOn` 默认开）
+- **0.5.8** — 适配 2026-11-05 WorkBuddy 更新：`hy4-preview` 拆成
+  `hy4free`/`hy4std`，补 kimi / mimo / glm-5.2 / minimax-m3.1-flash 等新模型的
+  适用场景与档位；同名变体下拉加「免费版/标准版/付费版」后缀区分；
+  `credits.js` 只删 deepseek 系的误导性「夜间折扣」badge（保留 glm-5.2 真实夜间五折）；
+  公告、探测目标、推荐清单、modelOrder 分档全面同步
 - **0.5.3** — 数据源头剔除「夜间折扣」badge（deepseek 系改显示峰谷状态）；
   新增「重型」标签与倍率放大排序（高单次消耗模型不再排在低价模型前）；
   推荐算法按真实消耗数据重排档位；模型适用场景正面描述（基于公开评测）；
