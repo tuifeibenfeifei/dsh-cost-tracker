@@ -1779,15 +1779,21 @@ window.__ModuleLoader__.load({
         if (m.credits) meta.push(String(m.credits) + ' 倍率')
         if (m.contextWindow) meta.push('上下文 ' + pTokens(m.contextWindow))
         if (m.badges && m.badges.length) meta.push(m.badges.join(' · '))
+        // 2026-11-10：面板「模型清单」也要显示适用场景（此前只有下拉悬停有）。
+        const suit = SUITABILITY[m.id]
+        if (suit) meta.push('适合：' + suit)
         if (Number(m.usedTurns) > 0) meta.push('已用 ' + m.usedTurns + ' 轮')
         if (Number(m.usedCost) > 0) meta.push('¥' + pNum(m.usedCost))
+        // 同名变体（hy4free/hy4std、hy3/hy3-x）补可区分后缀，和下拉标签一致。
+        const base = String(m.name || m.id)
+        const displayName = DISPLAY_SUFFIX[m.id] ? base + DISPLAY_SUFFIX[m.id] : base
         return h('div', { key: m.id + '@' + (m.provider || ''), className: 'dshctp-mrow tight' }, [
           h('div', { key: 'l' }, [
             h('div', { key: 'n', className: 'dshctp-mname' }, [
               ...pills.map((p, i) => h('span', {
                 key: 'p' + i, className: 'dshctp-pill', style: { background: p.c },
               }, p.t)),
-              String(m.name || m.id),
+              displayName,
             ]),
             meta.length ? h('div', { key: 'meta', className: 'dshctp-mmeta' }, meta.join(' · ')) : null,
           ]),

@@ -583,6 +583,10 @@ dsh-cost-tracker/
 - **0.5.4** — 等待审批/回答时响提示音 + 弹常驻气泡（监听 `approval/request`
   与 `user-questions/request`，新增 `/cost-tracker/pending` 轮询接口，
   独立开关 `pendingSoundOn` 默认开）
+- **0.5.9** — 修复费用面板「模型清单」未同步下拉标签的问题：
+  WorkBuddy 分组补齐「适合：」适用场景、同名变体（hy4free/hy4std、hy3/hy3-x）
+  加「免费版/标准版/付费版」可区分后缀。2026-11-10 WorkBuddy 5.21.3 复查
+  /usage 模型 ID 与 0.5.8 一致，无需改 ID 清单。
 - **0.5.8** — 适配 2026-11-05 WorkBuddy 更新：`hy4-preview` 拆成
   `hy4free`/`hy4std`，补 kimi / mimo / glm-5.2 / minimax-m3.1-flash 等新模型的
   适用场景与档位；同名变体下拉加「免费版/标准版/付费版」后缀区分；
