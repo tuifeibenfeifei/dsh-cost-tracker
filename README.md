@@ -583,6 +583,13 @@ dsh-cost-tracker/
 - **0.5.4** — 等待审批/回答时响提示音 + 弹常驻气泡（监听 `approval/request`
   与 `user-questions/request`，新增 `/cost-tracker/pending` 轮询接口，
   独立开关 `pendingSoundOn` 默认开）
+- **0.6.1** — 修复多账号池下的记账失真（2026-11-10 用户反馈「今天怎么用了
+  900 多积分」）。根因：`spent` 靠「两次采样总额之差」反推，而 WorkBuddy 是
+  5 个账号的池子，某次采样漏掉账号时总额凭空少几百，差额被记成单轮消耗
+  （实测出现单轮 730 假账）。改为**按账号记账**：`summarizeNew` 输出
+  `balances`（accountId→余额），`perAccountSpend` 只对两次采样都出现的账号
+  算差值，缺席账号一律排除；单账号跳变超 `MAX_TURN_SPEND`(200) 或余额上升
+  （充值）也不计入。新增 `test/peraccount.test.mjs`（9 项断言）。
 - **0.6.0** — 功能范围缩减：模型列表/标签展示交给 `dsh-connect-workbuddy`
   （它自己在维护模型 catalog 与徽标，两边重复做必然不同步）。移除
   `conversation.input.model.label` 注入、费用面板「全平台模型清单」卡片、
