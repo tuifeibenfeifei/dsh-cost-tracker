@@ -583,6 +583,12 @@ dsh-cost-tracker/
 - **0.5.4** — 等待审批/回答时响提示音 + 弹常驻气泡（监听 `approval/request`
   与 `user-questions/request`，新增 `/cost-tracker/pending` 轮询接口，
   独立开关 `pendingSoundOn` 默认开）
+- **0.6.0** — 功能范围缩减：模型列表/标签展示交给 `dsh-connect-workbuddy`
+  （它自己在维护模型 catalog 与徽标，两边重复做必然不同步）。移除
+  `conversation.input.model.label` 注入、费用面板「全平台模型清单」卡片、
+  `/cost-tracker/all-models` 路由。本插件此后只负责计费：余额挂件、
+  每轮消耗结算、费用面板、省钱建议。模型相关辅助函数与清单表保留
+  （宿主侧推荐引擎与 `/cost-tracker/models` 仍在用）。
 - **0.5.9** — 修复费用面板「模型清单」未同步下拉标签的问题：
   WorkBuddy 分组补齐「适合：」适用场景、同名变体（hy4free/hy4std、hy3/hy3-x）
   加「免费版/标准版/付费版」可区分后缀。2026-11-10 WorkBuddy 5.21.3 复查

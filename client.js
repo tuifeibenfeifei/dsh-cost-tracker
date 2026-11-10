@@ -1,33 +1,16 @@
 /**
- * dsh-cost-tracker — 浏览器半身：WorkBuddy 模型内联标签 + 悬停两行说明。
+ * dsh-cost-tracker — 浏览器半身：三平台余额挂件 + 每轮计费 + 费用面板。
  *
  * 手写 ModuleLoader bundle：无构建步骤，只依赖 shell 已提供的 react。
  *
- * 注册契约（来自 DSH 内核实测）：
- *   ctx.slots.inject('conversation.input.model.label', () =>
- *     ctx.slots.register({ name: '...', locale: ns }, Component))
- *   组件 props = { provider, model, placement, selected }
+ * ⚠️ 2026-11-10 功能范围缩减：**模型列表/标签的展示交给 dsh-connect-workbuddy**
+ * （它自己在维护模型 catalog 与徽标），本插件不再注册
+ * `conversation.input.model.label`，也不提供「全平台模型清单」卡片。
+ * 本插件只负责计费：余额挂件、每轮消耗结算、费用面板、省钱建议。
  *
- * **placement 三态**（内核 renderModelLabel 的三个调用点实测）：
- *   - 'trigger' 主界面输入框的当前模型名  → 本插件**完全不改动**，原样返回
- *   - 'menu'    折叠上层的当前模型名      → 同上
- *   - 'option'  下拉列表里的模型项        → 加档位/促销标签 + 悬停说明
- *
- * 显示：
- *   Hy4 preview  [常用] [夜间免费]
- *   Hy3          [免费] [额度限制]
- *   Step-5-Preview [免费]
- *   Deepseek-V4.1-Flash [主力] [夜间折扣]
- *
-  * 悬停（仅 'option' 时）显示模型信息：
-  *   倍率 / 促销 badge（上游实时）+ 限时提示 + 可用状态
-  *
-  * ⚠️ 促销时间窗不在本地硬编码 —— 上游 badge 本身就是实时状态，
-  *    本地写死日期会过期且与上游不同步。需要自定义说明走配置 promoDesc（见 README「配置」）。
- *
- * 两条硬性约束（踩过坑）：
- * 1. 返回空字符串会吞掉模型名 —— 内核只在 null/undefined 时用 fallback。
- * 2. 不能吞掉模型项的鼠标事件 —— 选择动作依赖 click 冒泡。
+ * 下方仍保留 tierOf/buildTags/buildHoverLines/HoverTip 等辅助函数与
+ * TIER_MAIN、HEAVY_MODELS、SUITABILITY 等清单：宿主侧推荐引擎与
+ * /cost-tracker/models 路由仍在使用同一批模型信息，删掉会造成两侧不同步。
  */
 window.__ModuleLoader__.load({
   id: 'dsh-cost-tracker',
@@ -706,175 +689,6 @@ window.__ModuleLoader__.load({
       return node
     }
 
-    /**
-     * 模型项：模型名 + 内联标签；悬停时在**旁侧浮层**显示两行说明。
-     * **只在 placement === 'option'（下拉列表）时生效**，
-     * 主界面（trigger / menu）原样返回，绝不改动。
-     */
-    function CostTrackerModelLabel(props) {
-      const { provider, model, placement } = props || {}
-      const [hover, setHover] = useState(false)
-      const wrapRef = useRef(null)
-      const leaveTimer = useRef(null)
-
-      // 每 60 秒重算，让「夜间折扣 / 高峰原价」按时段自动切换
-      const [, tick] = useState(0)
-      useEffect(() => {
-        const t = setInterval(() => tick(x => x + 1), 60000)
-        return () => clearInterval(t)
-      }, [])
-
-      useEffect(() => {
-        if (badgeCache === null) refreshBadges()
-        if (limitCache === null) refreshLimits()
-        // 累计消耗数据：首次挂载时拉一次，之后由 30s 定时器维护
-        refreshUsage()
-      }, [])
-
-      // 悬停期间每秒重绘，让「还剩 X 分 Y 秒」实时跳动
-      useEffect(() => {
-        if (!hover) return undefined
-        const t = setInterval(() => tick(x => x + 1), 1000)
-        return () => clearInterval(t)
-      }, [hover])
-
-      useEffect(() => () => {
-        if (leaveTimer.current) clearTimeout(leaveTimer.current)
-      }, [])
-
-      const rawName = String((model && model.name) || '')
-      const modelId = String((model && model.id) || '')
-      const base = baseName(rawName) || rawName
-      // 同名变体（hy4free/hy4std、hy3/hy3-x）补可区分后缀。
-      const name = (DISPLAY_SUFFIX[modelId] ? base + DISPLAY_SUFFIX[modelId] : base)
-
-      // ===== 关键：非下拉列表位置一律原样返回 =====
-      if (placement !== 'option') return rawName
-      if (!isWorkbuddy(provider)) return rawName
-
-      const tier = tierOf(provider, model)
-      if (tier === null) return rawName
-
-      const meta = (badgeCache && badgeCache[modelId]) || {}
-      const tags = buildTags(tier, modelId, meta)
-
-      const onEnter = () => {
-        if (leaveTimer.current) { clearTimeout(leaveTimer.current); leaveTimer.current = null }
-        setHover(true)
-      }
-      const onLeave = () => {
-        if (leaveTimer.current) clearTimeout(leaveTimer.current)
-        leaveTimer.current = setTimeout(() => setHover(false), 150)
-      }
-
-      const tagNodes = tags.map((tag, i) => h('span', {
-        key: 'tag' + i,
-        title: tag.title || tag.text,
-        style: {
-          padding: '0 7px',
-          borderRadius: '4px',
-          background: tag.bg,
-          color: '#fff',
-          fontSize: '10px',
-          lineHeight: '17px',
-          fontWeight: 700,
-          // 字间拉开：常 用 / 夜 间 免 费，比紧贴更清晰
-          letterSpacing: '0.18em',
-          whiteSpace: 'nowrap',
-          userSelect: 'none',
-          pointerEvents: 'none',
-        },
-      }, tag.text))
-
-      const lines = buildHoverLines(modelId, meta)
-
-      // 限流/额度用尽标记：**不经悬停也能一眼看到「这个模型现在不能用」**
-      // 三种状态用三种颜色，避免把「猜测」和「事实」混为一谈：
-      //   - 上游 402/429 真的拒绝了 → 红色「欠费」/「额度尽」
-      //   - 用户手动标记（猜测，可能误判）→ 灰色「手标」，不吓人
-      //   - 仅临时限流 → 红色「限流」
-      // ⚠️ 教训：2026-10-21 曾把 10/20 的手标误判永久显示成红色「额度尽」，
-      // 而那两个模型之后照样成功跑了 19 轮，用户直接质疑插件在胡说。
-      const limNow = (limitCache && limitCache[modelId]) || {}
-      const limitedNow = !!(limNow.rateLimited && limNow.rateLimitedUntil
-        && limNow.rateLimitedUntil > Date.now())
-      const exhaustedNow = !!(limNow.quotaExhaustedAt || limNow.creditExhaustedAt)
-      const manualMark = exhaustedNow && limNow.manual === true
-
-      const nodes = [h('span', { key: 'n' }, name || rawName), ...tagNodes]
-
-      if (exhaustedNow && manualMark) {
-        // 手标：灰色 + 文字说明这是猜的，绝不冒充事实
-        nodes.push(h('span', {
-          key: 'manual-mark',
-          title: '手动标记，上游不返回额度状态故可能是误判；24 小时后自动失效',
-          style: {
-            padding: '0 6px',
-            borderRadius: '4px',
-            background: '#4b5563',
-            color: '#fff',
-            fontSize: '10px',
-            lineHeight: '17px',
-            fontWeight: 700,
-            letterSpacing: '0.12em',
-            whiteSpace: 'nowrap',
-            userSelect: 'none',
-            pointerEvents: 'none',
-          },
-        }, '手 标'))
-      } else if (exhaustedNow) {
-        const isCredit = !!limNow.creditExhaustedAt
-        nodes.push(h('span', {
-          key: 'exhausted',
-          title: isCredit
-            ? '积分/余额不足，需充值或改用其他模型'
-            : '免费额度已用尽，等待每日重置后才能再用',
-          style: {
-            padding: '0 6px',
-            borderRadius: '4px',
-            background: isCredit ? '#7f1d1d' : '#b91c1c',
-            color: '#fff',
-            fontSize: '10px',
-            lineHeight: '17px',
-            fontWeight: 700,
-            letterSpacing: '0.12em',
-            whiteSpace: 'nowrap',
-            userSelect: 'none',
-            pointerEvents: 'none',
-          },
-        }, isCredit ? '欠 费' : '额 度 尽'))
-      } else if (limitedNow) {
-        nodes.push(h('span', {
-          key: 'locked',
-          style: {
-            padding: '0 6px',
-            borderRadius: '4px',
-            background: '#b91c1c',
-            color: '#fff',
-            fontSize: '10px',
-            lineHeight: '17px',
-            fontWeight: 700,
-            letterSpacing: '0.12em',
-            whiteSpace: 'nowrap',
-            userSelect: 'none',
-            pointerEvents: 'none',
-          },
-        }, '限 流'))
-      }
-
-      if (hover && lines.length) {
-        nodes.push(h(HoverTip, { key: 'tip', anchorEl: wrapRef.current, lines }))
-      }
-
-      return h('span', {
-        key: 'wrap',
-        ref: wrapRef,
-        style: { display: 'inline-flex', alignItems: 'center', gap: '5px', whiteSpace: 'nowrap', maxWidth: '100%' },
-        onMouseEnter: onEnter,
-        onMouseLeave: onLeave,
-      }, nodes)
-    }
-
     // ======================================================================
     // 费用面板页面（sidebar.panellist 行点击后由宿主渲染进 main 区域）
     //
@@ -1315,9 +1129,6 @@ window.__ModuleLoader__.load({
         // ---- 主动建议 ----
         h(RecoTip, { key: 'adv' }),
 
-        // ---- 全平台模型清单（按平台分组，没用过的折叠）----
-        h(AllModelsCard, { key: 'allmodels' }),
-
         // ---- 模型信息编辑器 ----
         h('div', { key: 'e', className: 'dshctp-card' }, [
           h('h3', { key: 'h' }, '补充模型信息'),
@@ -1422,37 +1233,6 @@ window.__ModuleLoader__.load({
         const t = setInterval(() => { refreshLimits(); refreshUsage() }, 30000)
         return () => clearInterval(t)
       }, 'cost-tracker: limits refresh')
-
-      // ---- 模型下拉标签（single slot）----
-      // ⚠️ 必须显式给 priority。
-      // `conversation.input.model.label` 是 **single** slot，原生 UI（registrant
-      // "Kb"）已占用 priority 0。用默认 0 注册会抛
-      //   "single slot ... already has a registration at priority 0
-      //    (registered by Kb) — register at a different priority to shadow it"
-      // 而这个异常会被外层 try/catch 吞掉，**连带后面的侧栏入口和提示全部
-      // 不执行**——2026-10-21 的「钱袋没了 + 提示没了」就是这个原因。
-      // 规则：single slot 用不同 priority 遮蔽原生渲染。
-      // ⚠️ 遮蔽方向极易搞反（2026-10-21 就错了一次）：
-      //   报错文案说 "lowest renders" —— **优先级数值最小的那个才渲染**。
-      //   原生 Kb 占 0，所以必须用**负数**才能真正盖过它；
-      //   上一版写 priority: 10（比 0 大）等于把渲染权让给原生，
-      //   于是「免费/常用」标签全没了——用户报的「模型列表标签没了」就是这个。
-      //   同时不能用 0（会和原生撞车直接抛错，那才是钱袋消失的原因）。
-      const LABEL_PRIORITY = -10
-      ctx.effect(() => {
-        let dispose = null
-        try {
-          dispose = ctx.slots.inject('conversation.input.model.label', () =>
-            ctx.slots.register({
-              name: 'conversation.input.model.label',
-              priority: LABEL_PRIORITY,
-              locale: namespace,
-            }, CostTrackerModelLabel))
-        } catch (e) {
-          try { console.error('[dsh-cost-tracker] model label register failed:', e) } catch { /* 忽略 */ }
-        }
-        return () => { try { dispose && dispose() } catch { /* 忽略 */ } }
-      }, 'cost-tracker: model label')
 
       // ---- 左侧栏入口：与「扩展管理」等原生行并列 ----
       // 做法完全对齐官方插件市场 dshmarket 的 sidebar-entry：
@@ -1735,106 +1515,6 @@ window.__ModuleLoader__.load({
         nodes.push(h('div', { key: noticeShared.toast.key, className: tcls }, '🧾 ' + noticeShared.toast.text))
       }
       return h('div', { className: 'dshctn-dock' }, nodes)
-    }
-
-    /**
-     * 全平台模型清单：按平台分组，**没用过的默认折叠**。
-     *
-     * 用户要求：「把其他 API 的也弄进去，包括阿里云的、deepseek 官方的，
-     * 然后在分类里面，把没用的模型整理起来不展开显示，如果有需要再展开」。
-     *
-     * 为什么必须折叠：阿里云一家就 54 个模型，其中只有 2 个用过；
-     * 全展开会把「用过的」淹没在几十条无关项里。
-     */
-    function AllModelsCard() {
-      const [data, setData] = useState(null)
-      const [open, setOpen] = useState({})
-
-      useEffect(() => {
-        let alive = true
-        const load = () => {
-          pFetch('/cost-tracker/all-models').then((j) => {
-            if (alive && j && j.ok) setData(j.groups || [])
-          }).catch(() => {})
-        }
-        load()
-        const t = setInterval(load, 60000)
-        return () => { alive = false; clearInterval(t) }
-      }, [])
-
-      if (!data) {
-        return h('div', { className: 'dshctp-card' }, [
-          h('h3', { key: 'h' }, '模型清单'),
-          h('div', { key: 'l', className: 'dshctp-hint' }, '加载中…'),
-        ])
-      }
-
-      const PLAT_COLOR = { aliyun: '#0369a1', deepseek: '#4f46e5', workbuddy: '#15803d' }
-
-      const rowOf = (m) => {
-        const pills = []
-        if (m.free) pills.push({ t: '免费', c: '#15803d' })
-        if (Number(m.usedTurns) > 0) pills.push({ t: '用过', c: '#6b7280' })
-        const meta = []
-        if (m.credits) meta.push(String(m.credits) + ' 倍率')
-        if (m.contextWindow) meta.push('上下文 ' + pTokens(m.contextWindow))
-        if (m.badges && m.badges.length) meta.push(m.badges.join(' · '))
-        // 2026-11-10：面板「模型清单」也要显示适用场景（此前只有下拉悬停有）。
-        const suit = SUITABILITY[m.id]
-        if (suit) meta.push('适合：' + suit)
-        if (Number(m.usedTurns) > 0) meta.push('已用 ' + m.usedTurns + ' 轮')
-        if (Number(m.usedCost) > 0) meta.push('¥' + pNum(m.usedCost))
-        // 同名变体（hy4free/hy4std、hy3/hy3-x）补可区分后缀，和下拉标签一致。
-        const base = String(m.name || m.id)
-        const displayName = DISPLAY_SUFFIX[m.id] ? base + DISPLAY_SUFFIX[m.id] : base
-        return h('div', { key: m.id + '@' + (m.provider || ''), className: 'dshctp-mrow tight' }, [
-          h('div', { key: 'l' }, [
-            h('div', { key: 'n', className: 'dshctp-mname' }, [
-              ...pills.map((p, i) => h('span', {
-                key: 'p' + i, className: 'dshctp-pill', style: { background: p.c },
-              }, p.t)),
-              displayName,
-            ]),
-            meta.length ? h('div', { key: 'meta', className: 'dshctp-mmeta' }, meta.join(' · ')) : null,
-          ]),
-        ])
-      }
-
-      return h('div', { className: 'dshctp-card' }, [
-        h('h3', { key: 'h' }, '模型清单'),
-        h('div', { key: 'hint', className: 'dshctp-hint', style: { marginBottom: '8px' } },
-          '按平台分组；没用过的模型默认收起，需要时点「展开」。'),
-        ...data.map((g) => {
-          const used = g.models.filter((m) => Number(m.usedTurns) > 0)
-          const unused = g.models.filter((m) => !(Number(m.usedTurns) > 0))
-          const isOpen = open[g.platform] === true
-          return h('div', { key: g.platform, className: 'dshctp-group' }, [
-            h('div', { key: 't', className: 'dshctp-grouphd' }, [
-              h('span', {
-                key: 'dot',
-                className: 'dshctp-dot2',
-                style: { background: PLAT_COLOR[g.platform] || '#6b7280' },
-              }),
-              h('span', { key: 'n', style: { fontWeight: 700 } }, g.title),
-              h('span', { key: 'c', className: 'dshctp-hint', style: { marginLeft: '6px' } },
-                g.models.length + ' 个 · 用过 ' + used.length),
-            ]),
-            h('div', { key: 'used' }, used.map(rowOf)),
-            unused.length
-              ? h('div', { key: 'unused' }, [
-                h('button', {
-                  key: 'toggle',
-                  type: 'button',
-                  className: 'dshctp-btn',
-                  style: { marginTop: '4px' },
-                  onClick: () => setOpen((s) => ({ ...s, [g.platform]: !isOpen })),
-                }, isOpen ? '▾ 收起 ' + unused.length + ' 个未使用' : '▸ 展开 ' + unused.length + ' 个未使用'),
-                isOpen ? h('div', { key: 'list', style: { marginTop: '4px' } }, unused.map(rowOf)) : null,
-              ])
-              : null,
-          ])
-        }),
-      ])
     }
 
     /** 气泡种类 → 图标 */
